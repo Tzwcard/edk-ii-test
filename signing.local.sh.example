@@ -1,0 +1,5 @@
+# Copy to signing.local.sh (gitignored) and fill in Linux/WSL paths.
+# Environment variables override this example's defaults.
+# Keep the existing unencrypted private key outside this repository.
+export EFI_SIGN_KEY="${EFI_SIGN_KEY:-/secure/path/MOK.priv}"
+export EFI_SIGN_CERT="${EFI_SIGN_CERT:-/secure/path/MOK.crt}"

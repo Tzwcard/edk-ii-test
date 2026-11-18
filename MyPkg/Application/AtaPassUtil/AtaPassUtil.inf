@@ -1,0 +1,34 @@
+## @file
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+[Defines]
+  INF_VERSION    = 0x0001001B
+  BASE_NAME      = AtaPassUtil
+  FILE_GUID      = E97144A8-D2D3-445F-8CE3-B81AA6ECF955
+  MODULE_TYPE    = UEFI_APPLICATION
+  VERSION_STRING = 1.0
+  ENTRY_POINT    = UefiMain
+
+[Sources]
+  Main.c
+  AtaPassUtil.c
+  AtaPassUtil.h
+  ../TCGOpalCheck/AtaSecurity.c
+  ../TCGOpalCheck/AtaSecurity.h
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  UefiLib
+  UefiBootServicesTableLib
+  BaseLib
+  BaseMemoryLib
+  MemoryAllocationLib
+  DevicePathLib
+
+[Protocols]
+  gEfiBlockIoProtocolGuid
+  gEfiStorageSecurityCommandProtocolGuid
+  gEfiDevicePathProtocolGuid

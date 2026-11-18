@@ -1,0 +1,28 @@
+## @file
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION    = 0x0001001B
+  BASE_NAME      = PCRRead
+  FILE_GUID      = E8BDBB92-A172-4E7F-B4B7-B0582B142E79
+  MODULE_TYPE    = UEFI_APPLICATION
+  VERSION_STRING = 1.0
+  ENTRY_POINT    = UefiMain
+
+[Sources]
+  PCRRead.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  SecurityPkg/SecurityPkg.dec
+
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  UefiLib
+  UefiBootServicesTableLib
+  BaseMemoryLib
+  Tpm2CommandLib
+
+[Protocols]
+  gEfiTcg2ProtocolGuid

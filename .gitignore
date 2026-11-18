@@ -1,0 +1,54 @@
+# Local build products (edk2 is intentionally tracked as a submodule).
+/Build/
+/Conf/
+/out/
+*.log
+
+# Machine-specific configuration and signing material. Never commit private keys.
+/signing.local.sh
+/.env
+/.env.*
+!/.env.example
+/keys/
+/certs/
+/secrets/
+*.key
+*.priv
+*.pem
+*.p8
+*.p12
+*.pfx
+*.der
+*.crt
+*.cer
+*.esl
+*.auth
+
+# Generated executables, symbols, disk images and compiler intermediates.
+*.efi
+*.iso
+*.img
+*.fd
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.pdb
+*.debug
+*.map
+*.deps
+
+# Python and editor/OS caches.
+__pycache__/
+*.py[cod]
+/.venv/
+/.vs/
+/.vscode/
+/.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini

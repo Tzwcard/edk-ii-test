@@ -1,0 +1,15 @@
+* text=auto
+/.gitmodules text eol=lf
+/.gitignore text eol=lf
+/.gitattributes text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+*.sh.example text eol=lf
+*.c text eol=lf
+*.h text eol=lf
+*.inf text eol=lf
+*.dsc text eol=lf
+*.py text eol=lf
+*.nsh text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
