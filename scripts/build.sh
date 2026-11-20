@@ -12,7 +12,7 @@ fi
 build -p MyPkg/MyPkg.dsc -a X64 -t GCC -b "$TARGET" -n "${JOBS:-8}"
 mkdir -p "$ROOT/out/$TARGET" "$ROOT/out/esp/EFI/BOOT"
 
-for APP in HelloWorld PCRRead TCGOpalCheck AtaPassUtil; do
+for APP in HelloWorld PCRRead TCGOpalCheck AtaPassUtil SMARTDisp UEFINVTest TPMOps NVMeDisp NVMeResetTest TestMain; do
   bash "$ROOT/scripts/sign-efi.sh" \
     "$ROOT/Build/MyPkg/${TARGET}_GCC/X64/$APP.efi" "$ROOT/out/$TARGET/$APP.efi"
 done
@@ -22,4 +22,10 @@ echo "EFI executable: $ROOT/out/$TARGET/HelloWorld.efi"
 echo "EFI executable: $ROOT/out/$TARGET/PCRRead.efi"
 echo "EFI executable: $ROOT/out/$TARGET/TCGOpalCheck.efi"
 echo "EFI executable: $ROOT/out/$TARGET/AtaPassUtil.efi"
+echo "EFI executable: $ROOT/out/$TARGET/SMARTDisp.efi"
+echo "EFI executable: $ROOT/out/$TARGET/UEFINVTest.efi"
+echo "EFI executable: $ROOT/out/$TARGET/TPMOps.efi"
+echo "EFI executable: $ROOT/out/$TARGET/NVMeDisp.efi"
+echo "EFI executable: $ROOT/out/$TARGET/NVMeResetTest.efi"
+echo "EFI executable: $ROOT/out/$TARGET/TestMain.efi"
 echo "Bootable directory: $ROOT/out/esp (contains the most recently built target)"

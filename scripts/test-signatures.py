@@ -15,7 +15,7 @@ cert = Path(subprocess.check_output(
     ["bash", str(root / "scripts/sign-efi.sh"), "--cert-path"], text=True
 ).strip())
 iso = root / "out" / f"uefi-shell-x64-{target}.iso"
-apps = ("HelloWorld", "PCRRead", "TCGOpalCheck", "AtaPassUtil")
+apps = ("HelloWorld", "PCRRead", "TCGOpalCheck", "AtaPassUtil", "SMARTDisp", "UEFINVTest", "TPMOps", "NVMeDisp", "NVMeResetTest", "TestMain")
 
 
 def run(*args):
@@ -77,7 +77,7 @@ with tempfile.TemporaryDirectory(prefix="efi-signatures-", dir=tests) as tempora
     if result.returncode == 0 or sentinel.read_bytes() != b"must remain unchanged":
         raise RuntimeError("Missing-key failure handling did not protect the output")
 
-print(f"PASS: {target} Shell + four apps match the signing certificate.")
+print(f"PASS: {target} Shell + {len(apps)} apps match the signing certificate.")
 print("PASS: ISO root and embedded FAT boot-image copies match the verified outputs.")
 print("PASS: missing signing key fails without overwriting the existing output.")
 print("This verifies signatures, not enrollment into firmware db or MOK.")

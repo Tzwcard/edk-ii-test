@@ -22,6 +22,12 @@ cp "$ROOT/out/$TARGET/HelloWorld.efi" "$STAGE/HelloWorld.efi"
 cp "$ROOT/out/$TARGET/PCRRead.efi" "$STAGE/PCRRead.efi"
 cp "$ROOT/out/$TARGET/TCGOpalCheck.efi" "$STAGE/TCGOpalCheck.efi"
 cp "$ROOT/out/$TARGET/AtaPassUtil.efi" "$STAGE/AtaPassUtil.efi"
+cp "$ROOT/out/$TARGET/SMARTDisp.efi" "$STAGE/SMARTDisp.efi"
+cp "$ROOT/out/$TARGET/UEFINVTest.efi" "$STAGE/UEFINVTest.efi"
+cp "$ROOT/out/$TARGET/TPMOps.efi" "$STAGE/TPMOps.efi"
+cp "$ROOT/out/$TARGET/NVMeDisp.efi" "$STAGE/NVMeDisp.efi"
+cp "$ROOT/out/$TARGET/NVMeResetTest.efi" "$STAGE/NVMeResetTest.efi"
+cp "$ROOT/out/$TARGET/TestMain.efi" "$STAGE/TestMain.efi"
 # Shell scripts on the FAT boot image use DOS line endings.
 sed 's/\r$//; s/$/\r/' "$ROOT/iso/startup.nsh" > "$STAGE/startup.nsh"
 IMAGE="$STAGE/boot/efiboot.img"
@@ -35,9 +41,15 @@ mcopy -i "$IMAGE" "$STAGE/HelloWorld.efi" "$STAGE/startup.nsh" ::/
 mcopy -i "$IMAGE" "$STAGE/PCRRead.efi" ::/
 mcopy -i "$IMAGE" "$STAGE/TCGOpalCheck.efi" ::/
 mcopy -i "$IMAGE" "$STAGE/AtaPassUtil.efi" ::/
+mcopy -i "$IMAGE" "$STAGE/SMARTDisp.efi" ::/
+mcopy -i "$IMAGE" "$STAGE/UEFINVTest.efi" ::/
+mcopy -i "$IMAGE" "$STAGE/TPMOps.efi" ::/
+mcopy -i "$IMAGE" "$STAGE/NVMeDisp.efi" ::/
+mcopy -i "$IMAGE" "$STAGE/NVMeResetTest.efi" ::/
+mcopy -i "$IMAGE" "$STAGE/TestMain.efi" ::/
 ISO="$ROOT/out/uefi-shell-x64-$TARGET.iso"
 xorriso -as mkisofs -R -J -V EDKII_SHELL \
   -e boot/efiboot.img -no-emul-boot -o "$ISO" "$STAGE"
 echo "Bootable UEFI-only ISO: $ISO"
-echo 'Shell and all four applications are MOK-signed and signature-verified.'
+echo 'Shell and all applications are MOK-signed and signature-verified.'
 echo 'MOK trust is not firmware db trust; direct firmware boot may still require db enrollment.'

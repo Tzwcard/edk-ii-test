@@ -73,7 +73,7 @@ cd D:\Workspace\EDKII
 EDKII/
 ├── MyPkg/
 │   ├── MyPkg.dsc                         # 平台：架构、库映射、待编译模块
-│   └── Application/HelloWorld/
+│   └── Application/             # NVMe/、Test/、SealSecret-DoNotShipToUEFI/、Unlocker/、Util/、ProofOfConcept/
 │       ├── HelloWorld.c                 # 从这里开始修改；入口 UefiMain
 │       └── HelloWorld.inf               # 模块：源文件、依赖包、库
 ├── edk2/                                # 固定提交的上游 Git submodule
@@ -83,7 +83,7 @@ EDKII/
 └── out/                                 # 汇总产物和测试日志
 ```
 
-修改 `MyPkg/Application/HelloWorld/HelloWorld.c` 后重新执行 `build.cmd` 即可增量编译。
+修改 `MyPkg/Application/ProofOfConcept/HelloWorld/HelloWorld.c` 后重新执行 `build.cmd` 即可增量编译。
 示例使用 `Print(L"...\r\n")` 输出 UTF-16 字符串，并在 5 秒后返回调用者。
 这是 `UEFI_APPLICATION`，不是 DXE 驱动，也不是完整主板固件。
 
@@ -92,7 +92,7 @@ EDKII/
 1. 复制 `HelloWorld` 目录，修改文件名和 `.inf` 中的 `BASE_NAME`、`FILE_GUID`、`[Sources]`；每个模块使用独立 GUID，可通过 PowerShell `[guid]::NewGuid()` 生成。
 2. 将新 `.inf` 路径加入 `MyPkg/MyPkg.dsc` 的 `[Components]`。
 3. 如引入新库，在 `.inf` 的 `[LibraryClasses]` 声明，在 `.dsc` 中映射对应实现；协议/GUID 按 EDK II 规则在 `.inf` 中声明。
-4. 编译后的新应用位于 `Build/MyPkg/<DEBUG或RELEASE>_GCC/X64/<BASE_NAME>.efi`。一键脚本会收集并签名当前四个应用；增加/更名应用后同步修改 `build.sh` 和 ISO 打包列表。
+4. 编译后的新应用位于 `Build/MyPkg/<DEBUG或RELEASE>_GCC/X64/<BASE_NAME>.efi`。一键脚本会收集并签名当前十个应用；增加/更名应用后同步修改 `build.sh` 和 ISO 打包列表。
 
 可使用 VS Code、Visual Studio 或其他编辑器直接编辑 Windows 路径下的源码。
 本次没有配置 Visual Studio 原生 MSVC 编译，也没有安装 Docker 镜像。
@@ -237,7 +237,7 @@ system/EFI partitions. Commands can modify any writable disk exposed to the VM.
 
 `iso/startup.nsh` controls the welcome commands. It deliberately leaves you at
 an interactive prompt rather than automatically launching the application.
-`scripts/make-iso.sh` packages only `HelloWorld.efi`; add further apps to both
+`scripts/make-iso.sh` packages the applications listed below; add further apps to both
 the ISO staging tree and its FAT boot image when extending it.
 
 ### ISO tooling and verification
@@ -274,9 +274,9 @@ TCGOpalCheck.efi
 
 产物：`out/DEBUG/TCGOpalCheck.efi`。
 源码、函数说明、结果解释和测试范围见
-[`MyPkg/Application/TCGOpalCheck/README.md`](MyPkg/Application/TCGOpalCheck/README.md)。
+[`MyPkg/Application/ProofOfConcept/TCGOpalCheck/README.md`](MyPkg/Application/ProofOfConcept/TCGOpalCheck/README.md)。
 
-目前 ISO 包含 `HelloWorld.efi`、`PCRRead.efi`、`TCGOpalCheck.efi`，不再只包含 HelloWorld。
+目前 ISO 包含 `HelloWorld.efi`、`PCRRead.efi`、`TCGOpalCheck.efi`、`AtaPassUtil.efi`、`SMARTDisp.efi`、`UEFINVTest.efi`、`TPMOps.efi`、`NVMeDisp.efi`、`NVMeResetTest.efi`、`TestMain.efi`。
 OPAL 工具只做 Level 0 Discovery 读取；未知状态不等于不支持。
 已验证 QEMU 中无 OPAL 接口的分支，未验证真实 OPAL SSD。
 不要并发执行多个编译/ISO 构建脚本：上游环境脚本会写共享的 `Conf/BuildEnv.sh`。
@@ -286,14 +286,14 @@ OPAL 工具只做 Level 0 Discovery 读取；未知状态不等于不支持。
 新增 `out/DEBUG/AtaPassUtil.efi` 和 `out/RELEASE/AtaPassUtil.efi`，DEBUG ISO 已包含。
 默认运行 **只读枚举和状态查询，不执行任何 SendData 操作**。
 
-按需在 `MyPkg/Application/AtaPassUtil/Main.c` 的 `UefiMain()` 中调用：
+按需在 `MyPkg/Application/ProofOfConcept/AtaPassUtil/Main.c` 的 `UefiMain()` 中调用：
 状态、设置 User/Master 密码、解锁、禁用密码、冻结、擦除准备、普通/增强擦除接口。
 所有修改接口需要显式启用写开关，擦除还需要额外确认参数及准备步骤。
 **不要在默认设备枚举循环中直接加入批量写操作，不要在重要数据盘上实验设置密码或擦除。**
 
-函数签名：`MyPkg/Application/AtaPassUtil/AtaPassUtil.h`。
+函数签名：`MyPkg/Application/ProofOfConcept/AtaPassUtil/AtaPassUtil.h`。
 完整调用说明、密码编码约定及验证范围：
-[`MyPkg/Application/AtaPassUtil/README.md`](MyPkg/Application/AtaPassUtil/README.md)。
+[`MyPkg/Application/ProofOfConcept/AtaPassUtil/README.md`](MyPkg/Application/ProofOfConcept/AtaPassUtil/README.md)。
 修改操作只使用模拟接口测试，未在真实 SSD 上执行。
 
 ## 11. 自动签名：复用驱动 MOK 证书
@@ -318,7 +318,7 @@ cp signing.local.sh.example signing.local.sh
 .\make-iso.cmd RELEASE
 ```
 
-- `out/<目标>/HelloWorld.efi`、`PCRRead.efi`、`TCGOpalCheck.efi`、`AtaPassUtil.efi` 均为已签名产物。
+- `out/<目标>/HelloWorld.efi`、`PCRRead.efi`、`TCGOpalCheck.efi`、`AtaPassUtil.efi`、`SMARTDisp.efi`、`UEFINVTest.efi`、`TPMOps.efi`、`NVMeDisp.efi`、`NVMeResetTest.efi`、`TestMain.efi` 均为已签名产物。
 - `out/esp/EFI/BOOT/BOOTX64.EFI` 使用已签名的 HelloWorld。
 - ISO 的 `EFI/BOOT/BOOTX64.EFI` 使用已签名 Shell，亦保存为 `out/<目标>/Shell.efi`；Shell 始终使用 RELEASE 构建。
 - ISO 根目录与 El Torito FAT 启动镜像均使用相同的已签名文件。
@@ -360,5 +360,103 @@ wsl -d Ubuntu-24.04 --exec python3 /mnt/d/Workspace/EDKII/scripts/test-signature
 wsl -d Ubuntu-24.04 --exec python3 /mnt/d/Workspace/EDKII/scripts/test-iso.py
 ```
 
-签名测试会从实际 ISO 中提取 FAT 启动镜像，验证 Shell 和四个应用的签名及各副本一致性，并验证缺少私钥时不会替换已有输出。
+签名测试会从实际 ISO 中提取 FAT 启动镜像，验证 Shell 和十个应用的签名及各副本一致性，并验证缺少私钥时不会替换已有输出。
 QEMU 测试仍使用普通 OVMF，**不能据此宣称已通过开启 Secure Boot 且导入证书的固件验证**；实机信任配置需要独立测试。
+
+## 12. SMARTDisp — NVMe SMART / Health
+
+新增 `out/DEBUG/SMARTDisp.efi` / `out/RELEASE/SMARTDisp.efi`，已自动签名并加入 ISO。
+
+```text
+SMARTDisp.efi          # 默认读取 UEFI 枚举的控制器 0
+SMARTDisp.efi --list   # 列出控制器身份，核对 Linux nvme0 对应哪一个
+SMARTDisp.efi 1        # 读取其他控制器
+```
+
+UEFI 编号不保证与 Linux 的 `/dev/nvme0` 顺序一致，需核对序列号和型号。
+工具只读取 Identify Controller 与标准 SMART 日志页，不修改磁盘或安全状态。
+功能和测试说明见 [`MyPkg/Application/ProofOfConcept/SMARTDisp/README.md`](MyPkg/Application/ProofOfConcept/SMARTDisp/README.md)。
+
+## 13. UEFINVTest — UEFI 非易失变量
+
+新增已签名的 `out/DEBUG/UEFINVTest.efi` / `out/RELEASE/UEFINVTest.efi`，已加入 ISO。
+
+```text
+UEFINVTest.efi          # 默认只读
+UEFINVTest.efi test     # 新建测试变量并读回校验；不覆盖已有变量
+UEFINVTest.efi read     # 重启后可再次读取
+UEFINVTest.efi write    # 显式创建/覆盖
+UEFINVTest.efi delete   # 删除测试变量
+```
+
+固定名称：`TestVariable-{bd29e016-764e-4a58-9d53-d64fe953edab}`；VendorGuid 同此 GUID。
+属性为 NV|BS|RT，只操作该自定义变量，不修改系统启动项或 Secure Boot 变量。
+`test`/`write` 会写真实固件 NVRAM；自动验证仅在隔离的 QEMU VARS 文件中进行。
+后续修改名称、GUID 和数据的位置，以及 Linux 读取方法，见
+[`MyPkg/Application/ProofOfConcept/UEFINVTest/README.md`](MyPkg/Application/ProofOfConcept/UEFINVTest/README.md)。
+
+## 14. TPMOps — TPM 2.0 密封 / 解封
+
+新增已签名的 `out/<目标>/TPMOps.efi`，通过 TCG2 协议调用 TPM2_CreatePrimary/Create/Load/Unseal。
+
+```text
+TPMOps.efi wrap          # 交互设置对象授权；密封示例数据，存为 NV|BS
+TPMOps.efi wrap --RT     # 加 RT，供 Linux 读取记录进行调试
+TPMOps.efi unwrap       # 输入对象授权，解封并打印示例明文 hex
+TPMOps.efi info
+TPMOps.efi dump
+TPMOps.efi delete
+```
+
+变量：`TPMTest-{a4e9a95e-5fde-4bcb-9f44-2b487f03395d}`，VendorGuid 同此 GUID。
+保存 TPM public/private blob，不保存明文或授权口令；已有变量拒绝覆盖。
+默认不绑定 PCR，不改变 hierarchy auth、不清 TPM、不分配持久句柄或 TPM NV index。
+这是使用密码会话的教学示例，不具备 TPM 参数加密；真实秘密应移除明文打印并加强会话/策略设计。
+
+Linux 导出：`scripts/export-tpmops.py`。接口、记录格式和 tpm2-tools 调试步骤见
+[`MyPkg/Application/ProofOfConcept/TPMOps/README.md`](MyPkg/Application/ProofOfConcept/TPMOps/README.md)。
+集成测试仅使用独立 swtpm 和临时 OVMF VARS，不访问真实 TPM 或主板 NVRAM。
+
+## 15. NVMeDisp — Identify Controller
+
+新增已签名的 `out/<目标>/NVMeDisp.efi`，读取 NVMe Identify Controller（CNS=1）的 4096 字节身份与能力数据。
+
+```text
+NVMeDisp.efi             # 默认 UEFI 控制器 0
+NVMeDisp.efi --list      # 列举控制器身份
+NVMeDisp.efi 1           # 选择其他控制器
+NVMeDisp.efi 0 --raw     # 附加完整 Identify hex
+```
+
+显示型号、序列号、固件、版本、OACS/ONCS、Security Send/Receive 声明、固件/日志/电源能力、容量字段和 SUBNQN 等。
+只读，不执行安全、格式化或擦除操作；UEFI 索引不保证与 Linux nvme0 一致。
+详细字段解释与适配入口见 [`MyPkg/Application/ProofOfConcept/NVMeDisp/README.md`](MyPkg/Application/ProofOfConcept/NVMeDisp/README.md)。
+
+## 16. NVMeResetTest — 逐步检查 / Reset / 再检查
+
+```text
+NVMeResetTest.efi --list
+NVMeResetTest.efi 0
+```
+
+核对目标身份后，依次输入 `CHECK`、`RESET`、`CHECK`，每次回车才执行对应步骤；`q` 回车或 Esc 取消。
+复用 TCGOpalCheck 的只读查询，只检查选中设备；中间通过驱动执行一次 `BlockIo->Reset(TRUE)`。
+reset 后重新枚举并核对原路径/身份，汇总 EF Enabled/Locked/Frozen 与 TCG Locking flags 前后变化。
+
+**不是保证解冻的工具。** reset 可能影响控制器上全部 namespace、打断 I/O 或重新锁盘，请从独立 USB/ISO 运行并先备份。
+不直接写寄存器，不设置密码、不擦除、不写磁盘数据；自动测试仅连接 QEMU 临时磁盘。
+详见 [`MyPkg/Application/ProofOfConcept/NVMeResetTest/README.md`](MyPkg/Application/ProofOfConcept/NVMeResetTest/README.md)。
+
+## 17. TestMain — 模块测试入口
+
+```text
+TestMain.efi nvme-enum   # 枚举 NVMe 控制器，显示数量
+TestMain.efi nvme-info   # 要求只有一个控制器，再调用 NVMeGetControllerInfo 并打印结果
+TestMain.efi --help
+```
+
+只实现 `SealSecret-DoNotShipToUEFI/SealSecret.c` 的 `UefiMain()` 当前已有的只读流程，不执行头部 plan。
+无参数只显示帮助；每次选择一项测试。可调用函数声明在
+`MyPkg/Application/Test/TestMain.h`，后续模块直接添加函数和参数分支。
+产物 `out/<目标>/TestMain.efi` 已签名并加入 ISO；SealSecret 与 Unlocker 草稿未接入构建或打包。
+`scripts/test-funcionality.py` 使用 QEMU 临时磁盘检查 0/1/2 个控制器和参数分支，不访问实盘。

@@ -3,18 +3,18 @@
 ##
 [Defines]
   INF_VERSION    = 0x0001001B
-  BASE_NAME      = TCGOpalCheck
-  FILE_GUID      = 9DF542B8-A546-48A9-809A-661D0E89C11C
+  BASE_NAME      = NVMeDisp
+  FILE_GUID      = D737E6AA-26EE-4BAA-96B0-8D26D7418B7E
   MODULE_TYPE    = UEFI_APPLICATION
-  VERSION_STRING = 1.1
+  VERSION_STRING = 1.0
   ENTRY_POINT    = UefiMain
 
 [Sources]
-  TCGOpalCheck.c
-  Discovery.c
-  Discovery.h
-  AtaSecurity.c
-  AtaSecurity.h
+  NVMeDisp.c
+  IdentifyData.c
+  IdentifyData.h
+  ../SMARTDisp/SmartData.c
+  ../SMARTDisp/SmartData.h
 
 [Packages]
   MdePkg/MdePkg.dec
@@ -29,6 +29,6 @@
   DevicePathLib
 
 [Protocols]
-  gEfiBlockIoProtocolGuid
+  gEfiNvmExpressPassThruProtocolGuid
   gEfiDevicePathProtocolGuid
-  gEfiStorageSecurityCommandProtocolGuid
+  gEfiShellParametersProtocolGuid

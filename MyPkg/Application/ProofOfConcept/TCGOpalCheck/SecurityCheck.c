@@ -16,6 +16,7 @@
 #include <Library/UefiLib.h>
 #include "Discovery.h"
 #include "AtaSecurity.h"
+#include "SecurityCheck.h"
 
 #define DISCOVERY_INITIAL_SIZE  4096
 #define DISCOVERY_MAX_SIZE      65536
@@ -128,7 +129,8 @@ STATIC
 EFI_STATUS
 QueryAtaPasswordStatus (
   IN EFI_STORAGE_SECURITY_COMMAND_PROTOCOL  *Security,
-  IN EFI_BLOCK_IO_MEDIA                     *Media
+  IN EFI_BLOCK_IO_MEDIA                     *Media,
+  OUT SECURITY_CHECK_RESULT                 *Result
   )
 {
   EFI_STATUS           Status;
@@ -187,6 +189,8 @@ QueryAtaPasswordStatus (
   }
 
   FreeAlignedPages (Buffer, 1);
+  Result->AtaValid = TRUE;
+  Result->Ata = Info;
   Print (L"  ATA Security supported: %s\r\n", YesNo (Info.Supported));
   if (!Info.Supported) {
     Print (L"  Remaining ATA password fields are not interpreted (S_SUPRT=0).\r\n");
@@ -288,17 +292,12 @@ ReadDiscovery (
 }
 
 EFI_STATUS
-EFIAPI
-UefiMain (
-  IN EFI_HANDLE        ImageHandle,
-  IN EFI_SYSTEM_TABLE  *SystemTable
+CheckStorageSecurity (
+  IN EFI_HANDLE Handle,
+  OUT SECURITY_CHECK_RESULT *Result
   )
 {
   EFI_STATUS                             Status;
-  EFI_HANDLE                             *Handles;
-  UINTN                                  Count;
-  UINTN                                  Index;
-  UINTN                                  Devices;
   EFI_BLOCK_IO_PROTOCOL                  *BlockIo;
   EFI_STORAGE_SECURITY_COMMAND_PROTOCOL  *Security;
   EFI_DEVICE_PATH_PROTOCOL               *Path;
@@ -309,94 +308,78 @@ UefiMain (
   BOOLEAN                                HasTcg;
   BOOLEAN                                HasAtaPassword;
 
-  Print (L"TCGOpalCheck - read-only TCG Level 0 Discovery\r\n");
-  Print (L"Includes ATA Device Server Password Security (0xEF) status.\r\n");
-  Print (L"No configuration, passwords, or disk data will be changed.\r\n");
-  Status = gBS->LocateHandleBuffer (
-                  ByProtocol, &gEfiBlockIoProtocolGuid, NULL, &Count, &Handles
+  if (Result == NULL) { return EFI_INVALID_PARAMETER; }
+  ZeroMem (Result, sizeof (*Result));
+  Status = gBS->HandleProtocol (Handle, &gEfiBlockIoProtocolGuid, (VOID **)&BlockIo);
+  if (EFI_ERROR (Status) || (BlockIo->Media == NULL) || BlockIo->Media->LogicalPartition) {
+    return EFI_ERROR (Status) ? Status : EFI_UNSUPPORTED;
+  }
+
+  Status = gBS->HandleProtocol (Handle, &gEfiDevicePathProtocolGuid, (VOID **)&Path);
+  if (!EFI_ERROR (Status)) {
+    Text = ConvertDevicePathToText (Path, FALSE, FALSE);
+    if (Text != NULL) {
+      Print (L"  Path: %s\r\n", Text);
+      FreePool (Text);
+    }
+  }
+
+  Status = gBS->HandleProtocol (
+                  Handle, &gEfiStorageSecurityCommandProtocolGuid, (VOID **)&Security
                   );
   if (EFI_ERROR (Status)) {
-    Print (L"Cannot enumerate block devices: %r. OPAL support: Unknown.\r\n", Status);
+    Print (L"  Storage security interface: Not exposed (%r)\r\n", Status);
+    Print (L"  OPAL support: Unknown (not proof of unsupported hardware).\r\n");
     return Status;
   }
 
-  Devices = 0;
-  for (Index = 0; Index < Count; Index++) {
-    Status = gBS->HandleProtocol (Handles[Index], &gEfiBlockIoProtocolGuid, (VOID **)&BlockIo);
-    if (EFI_ERROR (Status) || (BlockIo->Media == NULL) || BlockIo->Media->LogicalPartition) {
-      continue;
+  Print (L"  Storage security interface: Available\r\n");
+  ProtocolListStatus = QuerySecurityProtocols (Security, BlockIo->Media, &HasTcg, &HasAtaPassword);
+  // EF and OPAL are independent. An OPAL error must not skip EF status.
+  if (!EFI_ERROR (ProtocolListStatus) && HasAtaPassword) {
+    AtaStatus = QueryAtaPasswordStatus (Security, BlockIo->Media, Result);
+    if (EFI_ERROR (AtaStatus)) {
+      Print (L"  EF query did not yield a usable state: %r\r\n", AtaStatus);
     }
-
-    Print (L"\r\nDevice %u:\r\n", (UINT32)Devices++);
-    Status = gBS->HandleProtocol (Handles[Index], &gEfiDevicePathProtocolGuid, (VOID **)&Path);
-    if (!EFI_ERROR (Status)) {
-      Text = ConvertDevicePathToText (Path, FALSE, FALSE);
-      if (Text != NULL) {
-        Print (L"  Path: %s\r\n", Text);
-        FreePool (Text);
-      }
-    }
-
-    Status = gBS->HandleProtocol (
-                    Handles[Index], &gEfiStorageSecurityCommandProtocolGuid, (VOID **)&Security
-                    );
-    if (EFI_ERROR (Status)) {
-      Print (L"  Storage security interface: Not exposed (%r)\r\n", Status);
-      Print (L"  OPAL support: Unknown (not proof of unsupported hardware).\r\n");
-      continue;
-    }
-
-    Print (L"  Storage security interface: Available\r\n");
-    ProtocolListStatus = QuerySecurityProtocols (Security, BlockIo->Media, &HasTcg, &HasAtaPassword);
-    // EF and OPAL are independent. An OPAL error must not skip EF status.
-    if (!EFI_ERROR (ProtocolListStatus) && HasAtaPassword) {
-      AtaStatus = QueryAtaPasswordStatus (Security, BlockIo->Media);
-      if (EFI_ERROR (AtaStatus)) {
-        Print (L"  EF query did not yield a usable state: %r\r\n", AtaStatus);
-      }
-    } else if (EFI_ERROR (ProtocolListStatus)) {
-      Print (L"  EF status: Unknown; query skipped because protocol list is unavailable.\r\n");
-    } else {
-      Print (L"  EF status: Skipped (protocol 0xEF not advertised).\r\n");
-    }
-
-    // Preserve the existing 0x01 probe, even when absent from the list.
-    Print (L"  OPAL Discovery query (protocol 0x01):\r\n");
-    Status = ReadDiscovery (Security, BlockIo->Media, &Info);
-    if (EFI_ERROR (Status)) {
-      Print (L"  Discovery failed: %r\r\n", Status);
-      if (!EFI_ERROR (ProtocolListStatus) && !HasTcg) {
-        Print (L"  OPAL: Not available through current interface (0x01 not advertised).\r\n");
-      } else {
-        Print (L"  OPAL support: Unknown.\r\n");
-      }
-
-      continue;
-    }
-
-    Print (L"  OPAL 1.x SSC advertised: %s\r\n", YesNo (Info.Opal1));
-    Print (L"  OPAL 2.x SSC advertised: %s\r\n", YesNo (Info.Opal2));
-    Print (L"  Opalite SSC advertised: %s\r\n", YesNo (Info.Opalite));
-    Print (L"  Pyrite 1/2 SSC advertised: %s / %s (not OPAL)\r\n",
-      YesNo (Info.Pyrite1), YesNo (Info.Pyrite2));
-    if (!Info.Opal1 && !Info.Opal2) {
-      Print (L"  No OPAL 1.x/2.x descriptor in the complete discovery response.\r\n");
-    }
-
-    if (Info.HasLocking) {
-      Print (L"  LockingSupported: %s\r\n", YesNo ((Info.LockingFlags & BIT0) != 0));
-      Print (L"  LockingEnabled:   %s\r\n", YesNo ((Info.LockingFlags & BIT1) != 0));
-      Print (L"  Locked:           %s\r\n", YesNo ((Info.LockingFlags & BIT2) != 0));
-      Print (L"  MediaEncryption:  %s\r\n", YesNo ((Info.LockingFlags & BIT3) != 0));
-      Print (L"  MBREnabled:       %s\r\n", YesNo ((Info.LockingFlags & BIT4) != 0));
-      Print (L"  MBRDone:          %s\r\n", YesNo ((Info.LockingFlags & BIT5) != 0));
-    } else {
-      Print (L"  Locking state: Unknown (no Locking feature descriptor).\r\n");
-    }
+  } else if (EFI_ERROR (ProtocolListStatus)) {
+    Print (L"  EF status: Unknown; query skipped because protocol list is unavailable.\r\n");
+  } else {
+    Print (L"  EF status: Skipped (protocol 0xEF not advertised).\r\n");
   }
 
-  FreePool (Handles);
-  Print (L"\r\nChecked %u whole-device handle(s); no write commands issued.\r\n", (UINT32)Devices);
-  Print (L"Discovery does not prove ownership, credentials, or per-range access.\r\n");
+  // Preserve the existing 0x01 probe, even when absent from the list.
+  Print (L"  OPAL Discovery query (protocol 0x01):\r\n");
+  Status = ReadDiscovery (Security, BlockIo->Media, &Info);
+  if (EFI_ERROR (Status)) {
+    Print (L"  Discovery failed: %r\r\n", Status);
+    if (!EFI_ERROR (ProtocolListStatus) && !HasTcg) {
+      Print (L"  OPAL: Not available through current interface (0x01 not advertised).\r\n");
+    } else {
+      Print (L"  OPAL support: Unknown.\r\n");
+    }
+    return Status;
+  }
+
+  Result->DiscoveryValid = TRUE;
+  Result->Discovery = Info;
+  Print (L"  OPAL 1.x SSC advertised: %s\r\n", YesNo (Info.Opal1));
+  Print (L"  OPAL 2.x SSC advertised: %s\r\n", YesNo (Info.Opal2));
+  Print (L"  Opalite SSC advertised: %s\r\n", YesNo (Info.Opalite));
+  Print (L"  Pyrite 1/2 SSC advertised: %s / %s (not OPAL)\r\n",
+    YesNo (Info.Pyrite1), YesNo (Info.Pyrite2));
+  if (!Info.Opal1 && !Info.Opal2) {
+    Print (L"  No OPAL 1.x/2.x descriptor in the complete discovery response.\r\n");
+  }
+
+  if (Info.HasLocking) {
+    Print (L"  LockingSupported: %s\r\n", YesNo ((Info.LockingFlags & BIT0) != 0));
+    Print (L"  LockingEnabled:   %s\r\n", YesNo ((Info.LockingFlags & BIT1) != 0));
+    Print (L"  Locked:           %s\r\n", YesNo ((Info.LockingFlags & BIT2) != 0));
+    Print (L"  MediaEncryption:  %s\r\n", YesNo ((Info.LockingFlags & BIT3) != 0));
+    Print (L"  MBREnabled:       %s\r\n", YesNo ((Info.LockingFlags & BIT4) != 0));
+    Print (L"  MBRDone:          %s\r\n", YesNo ((Info.LockingFlags & BIT5) != 0));
+  } else {
+    Print (L"  Locking state: Unknown (no Locking feature descriptor).\r\n");
+  }
   return EFI_SUCCESS;
 }

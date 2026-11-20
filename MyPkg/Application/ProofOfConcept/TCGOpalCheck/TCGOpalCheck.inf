@@ -1,0 +1,36 @@
+## @file
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+[Defines]
+  INF_VERSION    = 0x0001001B
+  BASE_NAME      = TCGOpalCheck
+  FILE_GUID      = 9DF542B8-A546-48A9-809A-661D0E89C11C
+  MODULE_TYPE    = UEFI_APPLICATION
+  VERSION_STRING = 1.1
+  ENTRY_POINT    = UefiMain
+
+[Sources]
+  TCGOpalCheck.c
+  SecurityCheck.c
+  SecurityCheck.h
+  Discovery.c
+  Discovery.h
+  AtaSecurity.c
+  AtaSecurity.h
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  UefiLib
+  UefiBootServicesTableLib
+  BaseLib
+  BaseMemoryLib
+  MemoryAllocationLib
+  DevicePathLib
+
+[Protocols]
+  gEfiBlockIoProtocolGuid
+  gEfiDevicePathProtocolGuid
+  gEfiStorageSecurityCommandProtocolGuid

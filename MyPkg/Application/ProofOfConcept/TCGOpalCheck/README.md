@@ -23,9 +23,9 @@ TCGOpalCheck.efi
 
 如 `fs0:` 不是工具所在文件系统，按 `map -r` 结果选择其他 `fsN:`。
 独立程序位于 `out/DEBUG/TCGOpalCheck.efi`，可以复制到已有的 FAT32 测试 U 盘，在 UEFI Shell 中运行。
-ISO 内的根目录和 FAT EFI 启动镜像均包含它。RELEASE 构建同样支持；当前已重建的 ISO 是 DEBUG。
+DEBUG/RELEASE ISO 内的根目录和 FAT EFI 启动镜像均包含它。
 已有系统盘上不要修改 OPAL 或 Secure Boot 配置；若需要调整启动设置，先准备好 BitLocker 恢复密钥。
-程序未签名，受 Secure Boot 策略限制。
+一键构建会自动签名；实机 Secure Boot 执行仍需要相应固件信任。
 
 ## 代码中的关键函数
 
@@ -37,6 +37,10 @@ ISO 内的根目录和 FAT EFI 启动镜像均包含它。RELEASE 构建同样�
 | `AllocateAlignedPages()` | 按设备的 `IoAlign` 分配传输缓冲区 |
 | `Security->ReceiveData()` | 只发送 Level 0 Discovery 读取请求 |
 | `ParseDiscovery()` | 完整检查长度后解析功能描述符 |
+
+`TCGOpalCheck.c` 保留全设备枚举入口；传输和状态输出位于 `SecurityCheck.c`。
+`CheckStorageSecurity(Handle, &Result)` 只查询指定完整设备，结果中的 `AtaValid` 和
+`DiscoveryValid` 独立，供 `NVMeResetTest` 复用。这个共享查询本身不 reset、不发送写命令。
 
 `ReadDiscovery()` 使用安全协议 ID `0x01`、Level 0 Discovery 协议特定值 `0x0001`。
 协议特定值传入 `ReceiveData()` 前用 `SwapBytes16()` 转为线序，与 EDK II 自带 OPAL 传输代码一致。

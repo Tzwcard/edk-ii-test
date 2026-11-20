@@ -46,6 +46,8 @@ __pycache__/
 /.vs/
 /.vscode/
 /.idea/
+# clangd/IntelliSense config with absolute include paths for this machine.
+/.clangd
 *.swp
 *.swo
 *~

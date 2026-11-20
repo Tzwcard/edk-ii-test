@@ -21,7 +21,7 @@ selector = selectors.DefaultSelector()
 selector.register(process.stdout, selectors.EVENT_READ)
 transcript = bytearray()
 pending = bytearray()
-commands = [b"map -r\r", b"fs0:\r", b"ls\r", b"TCGOpalCheck.efi\r", b"AtaPassUtil.efi\r", b"HelloWorld.efi\r"]
+commands = [b"map -r\r", b"fs0:\r", b"ls\r", b"TCGOpalCheck.efi\r", b"AtaPassUtil.efi\r", b"SMARTDisp.efi\r", b"NVMeDisp.efi\r", b"NVMeResetTest.efi --help\r", b"UEFINVTest.efi\r", b"TPMOps.efi\r", b"HelloWorld.efi\r"]
 index = 0
 success = False
 deadline = time.monotonic() + 90
@@ -44,6 +44,13 @@ try:
                 and b"OPAL support: Unknown" in transcript
                 and b"no write commands issued." in transcript
                 and b"AtaPassUtil finished: read-only entry; no SendData calls." in transcript
+                and b"No NVMe PassThru controllers available:" in transcript
+                and b"UEFINVTest - isolated NV variable read/write test" in transcript
+                and b"GetVariable: Not Found" in transcript
+                and b"TPMOps - TPM 2.0 sealed-data example" in transcript
+                and b"Usage: TPMOps.efi wrap [--RT]" in transcript
+                and b"NVMeDisp - read-only NVMe Identify Controller (CNS=1)" in transcript
+                and b"Usage: NVMeResetTest.efi [controller-index] | --list" in transcript
                 and index == len(commands)
             )
             break
@@ -73,5 +80,5 @@ finally:
 if not success:
     print(transcript[-6000:].decode("utf-8", errors="replace"))
     raise SystemExit(f"FAIL: ISO shell / application test. See {log_path}")
-print("PASS: ISO booted; shell, TCGOpalCheck, AtaPassUtil read-only entry, and HelloWorld executed.")
+print("PASS: ISO booted; tools, SMARTDisp no-NVMe path, UEFINVTest default read, and HelloWorld executed.")
 print(f"Log: {log_path}")

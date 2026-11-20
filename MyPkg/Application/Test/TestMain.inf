@@ -1,0 +1,33 @@
+## @file
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+[Defines]
+  INF_VERSION    = 0x0001001B
+  BASE_NAME      = TestMain
+  FILE_GUID      = F5CA6741-5A27-44D8-A0C0-F32491ABFCA3
+  MODULE_TYPE    = UEFI_APPLICATION
+  VERSION_STRING = 1.0
+  ENTRY_POINT    = UefiMain
+
+[Sources]
+  TestMain.c
+  TestMain.h
+  ../NVMe/InfoFetch.c
+  ../NVMe/InfoFetch.h
+  ../Util/ValueAccess.c
+  ../Util/ValueAccess.h
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  UefiLib
+  UefiBootServicesTableLib
+  BaseLib
+  BaseMemoryLib
+  MemoryAllocationLib
+
+[Protocols]
+  gEfiNvmExpressPassThruProtocolGuid
+  gEfiShellParametersProtocolGuid

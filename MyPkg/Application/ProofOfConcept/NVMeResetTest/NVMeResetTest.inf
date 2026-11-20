@@ -1,0 +1,40 @@
+## @file
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+[Defines]
+  INF_VERSION    = 0x0001001B
+  BASE_NAME      = NVMeResetTest
+  FILE_GUID      = E6B1376C-88B8-4661-B507-F235E0F9B55D
+  MODULE_TYPE    = UEFI_APPLICATION
+  VERSION_STRING = 1.0
+  ENTRY_POINT    = UefiMain
+
+[Sources]
+  NVMeResetTest.c
+  ../NVMeDisp/IdentifyData.c
+  ../NVMeDisp/IdentifyData.h
+  ../TCGOpalCheck/SecurityCheck.c
+  ../TCGOpalCheck/SecurityCheck.h
+  ../TCGOpalCheck/Discovery.c
+  ../TCGOpalCheck/Discovery.h
+  ../TCGOpalCheck/AtaSecurity.c
+  ../TCGOpalCheck/AtaSecurity.h
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  UefiLib
+  UefiBootServicesTableLib
+  BaseLib
+  BaseMemoryLib
+  MemoryAllocationLib
+  DevicePathLib
+
+[Protocols]
+  gEfiNvmExpressPassThruProtocolGuid
+  gEfiBlockIoProtocolGuid
+  gEfiDevicePathProtocolGuid
+  gEfiShellParametersProtocolGuid
+  gEfiStorageSecurityCommandProtocolGuid

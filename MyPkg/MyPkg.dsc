@@ -32,7 +32,13 @@
 
 
 [Components]
-  MyPkg/Application/HelloWorld/HelloWorld.inf
-  MyPkg/Application/PCRRead/PCRRead.inf
-  MyPkg/Application/TCGOpalCheck/TCGOpalCheck.inf
-  MyPkg/Application/AtaPassUtil/AtaPassUtil.inf
+  MyPkg/Application/ProofOfConcept/HelloWorld/HelloWorld.inf
+  MyPkg/Application/ProofOfConcept/PCRRead/PCRRead.inf
+  MyPkg/Application/ProofOfConcept/TCGOpalCheck/TCGOpalCheck.inf
+  MyPkg/Application/ProofOfConcept/AtaPassUtil/AtaPassUtil.inf
+  MyPkg/Application/ProofOfConcept/SMARTDisp/SMARTDisp.inf
+  MyPkg/Application/ProofOfConcept/UEFINVTest/UEFINVTest.inf
+  MyPkg/Application/ProofOfConcept/TPMOps/TPMOps.inf
+  MyPkg/Application/ProofOfConcept/NVMeDisp/NVMeDisp.inf
+  MyPkg/Application/ProofOfConcept/NVMeResetTest/NVMeResetTest.inf
+  MyPkg/Application/Test/TestMain.inf
