@@ -1,5 +1,5 @@
 ## @file
-# Minimal X64 UEFI application platform.
+# X64 UEFI applications and separately located PoCs, built together.
 # SPDX-License-Identifier: BSD-2-Clause-Patent
 ##
 [Defines]
@@ -32,13 +32,27 @@
 
 
 [Components]
-  MyPkg/Application/ProofOfConcept/HelloWorld/HelloWorld.inf
-  MyPkg/Application/ProofOfConcept/PCRRead/PCRRead.inf
-  MyPkg/Application/ProofOfConcept/TCGOpalCheck/TCGOpalCheck.inf
-  MyPkg/Application/ProofOfConcept/AtaPassUtil/AtaPassUtil.inf
-  MyPkg/Application/ProofOfConcept/SMARTDisp/SMARTDisp.inf
-  MyPkg/Application/ProofOfConcept/UEFINVTest/UEFINVTest.inf
-  MyPkg/Application/ProofOfConcept/TPMOps/TPMOps.inf
-  MyPkg/Application/ProofOfConcept/NVMeDisp/NVMeDisp.inf
-  MyPkg/Application/ProofOfConcept/NVMeResetTest/NVMeResetTest.inf
+  MyPkg/ProofOfConcept/OpalPba/OpalPba.inf
+  MyPkg/ProofOfConcept/HelloWorld/HelloWorld.inf
+  MyPkg/ProofOfConcept/PCRRead/PCRRead.inf
+  MyPkg/ProofOfConcept/TCGOpalCheck/TCGOpalCheck.inf
+  MyPkg/ProofOfConcept/AtaPassUtil/AtaPassUtil.inf
+  MyPkg/ProofOfConcept/SMARTDisp/SMARTDisp.inf
+  MyPkg/ProofOfConcept/UEFINVTest/UEFINVTest.inf
+  MyPkg/ProofOfConcept/TPMOps/TPMOps.inf
+  MyPkg/ProofOfConcept/NVMeDisp/NVMeDisp.inf
+  MyPkg/ProofOfConcept/NVMeResetTest/NVMeResetTest.inf
   MyPkg/Application/Test/TestMain.inf
+  MyPkg/ProofOfConcept/OpalTest/OpalTest.inf {
+    <LibraryClasses>
+      TcgStorageOpalLib|SecurityPkg/Library/TcgStorageOpalLib/TcgStorageOpalLib.inf
+      TcgStorageCoreLib|SecurityPkg/Library/TcgStorageCoreLib/TcgStorageCoreLib.inf
+      TimerLib|UefiCpuPkg/Library/SecPeiDxeTimerLibUefiCpu/SecPeiDxeTimerLibUefiCpu.inf
+      LocalApicLib|UefiCpuPkg/Library/BaseXApicX2ApicLib/BaseXApicX2ApicLib.inf
+      IoLib|MdePkg/Library/BaseIoLibIntrinsic/BaseIoLibIntrinsic.inf
+      BaseCryptLib|CryptoPkg/Library/BaseCryptLib/BaseCryptLib.inf
+      OpensslLib|CryptoPkg/Library/OpensslLib/OpensslLib.inf
+      IntrinsicLib|CryptoPkg/Library/IntrinsicLib/IntrinsicLib.inf
+      SynchronizationLib|MdePkg/Library/BaseSynchronizationLib/BaseSynchronizationLib.inf
+      RngLib|MdePkg/Library/BaseRngLib/BaseRngLib.inf
+  }

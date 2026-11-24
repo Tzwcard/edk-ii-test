@@ -21,15 +21,46 @@ TPMOps.efi unwrap          # 输入对象口令，解封并显示明文 hex（�
 TPMOps.efi info            # 查看记录版本、属性和 blob 长度，不访问 TPM
 TPMOps.efi dump            # 导出记录 hex 到控制台，不解封
 TPMOps.efi delete          # 只删除此 UEFI 变量，不清 TPM 或改变 hierarchy
+TPMOps.efi wrap --pcr0     # 另建 PCR0 policy-only 对象，不询问对象口令
+TPMOps.efi wrap --pcr0 --RT # 同上，变量增加 RT 可见性
+TPMOps.efi unwrap --pcr0   # PCR0 匹配则自动解封，不询问对象口令
+TPMOps.efi info --pcr0     # 查看独立 PCR0 记录；dump/delete 同样支持 --pcr0
 ```
 
-对象口令为 **8–32 个可打印 ASCII 字节**，不回显、不接受命令行口令、不保存到变量。
+默认密码模式的对象口令为 **8–32 个可打印 ASCII 字节**，不回显、不接受命令行口令、不保存到变量。
 Esc 取消；wrap 要求输入两次。错误口令不自动重试，可能增加 TPM 全局防字典攻击计数。
 不要在实机上反复猜密码，也不要通过 TPM Clear 或修改 lockout 配置来绕过错误。
 
 `wrap` 不覆盖已有变量，即使这次指定的 `--RT` 不同也会拒绝。
 如需重新测试，先读取/导出原记录，再明确 `delete`，然后重新 wrap。
 `--RT` 仅用于新建变量时选择属性；unwrap/info/dump/delete 使用已存属性，无需该参数。
+
+## PCR0 自动授权模式
+
+`--pcr0` 选择 **SHA256 bank 的 PCR0 + PolicyCommandCode(Unseal)**，不是只在主机代码里比较 PCR。
+SHA256 bank 未激活就拒绝，不回退到其他 bank。
+
+- wrap：用 TPM GetRandom 生成调用者 nonce；建立 trial session，执行 PolicyPCR（读取当前 PCR0）、
+  PolicyCommandCode(Unseal)、PolicyGetDigest；关闭 session，再把 digest 放入 sealed object's authPolicy。
+- 对象 attributes=`0x00000012`（fixedTPM/fixedParent），**清除 userWithAuth，不能用空密码或其他密码绕过策略**。
+  不添加 PolicyAuthValue/PolicyPassword，因此不询问对象口令。
+- unwrap：重建/核对父对象并加载 blob；建立 policy session，执行相同策略，核对当前 digest 与 public.authPolicy。
+  不一致就返回 Security Violation，不调用 Unseal、不输出明文、不回退，也不自动重新密封。
+  一致时才用 policy session 执行 Unseal；TPM 还检查策略执行后 PCR 是否变化。
+- 所有临时 policy/trial session 和对象都会尝试 FlushContext；只操作本次创建的句柄。
+- 应用不会 Extend/Reset PCR、清 TPM 或修改 hierarchy auth。默认命令仍为原密码模式。
+
+PCR0 对象保存在单独的变量：
+```text
+TPMTest-PCR0-{a4e9a95e-5fde-4bcb-9f44-2b487f03395d}
+```
+VendorGuid 和 NV|BS / --RT 规则不变。已有记录拒绝覆盖；`delete --pcr0` 只删除 PCR0 记录，
+不会删除密码模式记录。两个模式不互相转换，记录与指定模式不符就拒绝。
+
+**必须在可信、预期的固件测量状态下执行 wrap。** PCR0 通常测量固件相关内容，固件升级或平台测量变化可能导致旧对象无法解封。
+它不是“本程序身份”认证，也不保证启动链完整性：同一 PCR 状态下其他能调用 TPM 并获取 blob 的程序也可能解封。
+“自动”仅指无需对象密码，不代表自动启动 EFI，也不提供失败后的恢复密钥。
+需要恢复能力时应事先另行设计，不要通过失败后自动 wrap 来绕过旧策略。
 
 ## 变量名称与属性
 
@@ -70,15 +101,16 @@ unwrap:
 - TPM 清除、更换或 owner seed 改变后，原 blob 通常不可恢复；删除变量也不等于清除 TPM。
 - 当前仅支持 **空 owner hierarchy authorization**。如 owner auth 非空会报错，不修改或重置 owner auth。
 - Parent：RSA-2048、SHA256 Name、AES-128-CFB，attributes=`0x00030472`。
-- Sealed object：keyedHash、SHA256 Name、fixedTPM/fixedParent/userWithAuth，attributes=`0x00000052`。
+- 默认 sealed object：keyedHash、SHA256 Name、fixedTPM/fixedParent/userWithAuth，attributes=`0x00000052`。
 - 对象的 `noDA` 未设置，保留防字典攻击机制；parent 的 `noDA` 不会替代子对象授权。
-- **没有 PCR policy**，不依赖 PCR0/7，不用于替代现有 LUKS TPM 策略。后续如需 PCR policy 要实现 policy session，而不是仅修改 NVRAM 属性。
+- 默认模式没有 PCR policy；`--pcr0` 使用上述 policy session，不用于替代或修改现有 LUKS TPM 策略。
 - 只对 TPM 明确返回的 RETRY / YIELDED / TESTING 警告做有限重试，最多 50 次、间隔 100ms；不重试授权失败、锁定或传输错误。
 - 仅清理本次创建的 transient handles，不枚举/驱逐系统已有对象。
 
 ### 示例的安全边界
 
-本例使用 `TPM_RS_PW` 密码会话，**没有启用 salted HMAC session 或 TPM 参数加密**。
+默认对象使用 `TPM_RS_PW`，PCR0 对象使用 unsalted/unbound policy session；父对象仍使用空 owner 密码会话。
+**两种模式都没有启用 salted HMAC session 或 TPM 参数加密**。
 所以它演示的是 TPM blob 的静态保护与授权流程，不能防御 TPM 总线窃听或恶意固件。
 unwrap 明确将明文输出到控制台，仅供调试；用于真实密钥时必须移除此输出。
 内部命令缓冲区和口令/解封数据会覆盖清零，但不宣称能消除所有编译器副本、寄存器或硬件残留。
@@ -93,6 +125,8 @@ Frame header 是格式元数据，不是应用来源签名；TPM 会在 Load/Uns
 ```c
 TpmOpsWrap (Tcg2, Secret, SecretSize, Auth, AuthSize, &Blob, &TpmRc);
 TpmOpsUnwrap (Tcg2, &Blob, Auth, AuthSize, Plaintext, &PlaintextSize, &TpmRc);
+TpmOpsWrapPcr0 (Tcg2, Secret, SecretSize, &Blob, &TpmRc);
+TpmOpsUnwrapPcr0 (Tcg2, &Blob, Plaintext, &PlaintextSize, &TpmRc);
 TpmOpsEncode (&Blob, Record, &RecordSize);
 TpmOpsDecode (Record, RecordSize, &Blob);
 TpmOpsWipe (SensitiveBuffer, Size);
@@ -120,6 +154,14 @@ TPM 字段采用大端线序，变量记录头采用显式小端，不直接持�
 private blob 是 TPM 保护的密文，不是可直接使用的私钥。记录不包含对象口令和明文。
 public/private 可以复制，但固定 TPM/父对象绑定意味着不能拿到另一台 TPM 直接解封。
 
+### PCR0 记录格式（v2）
+
+头部仍为 40 字节，各长度字段和后续 TPM2B 排列与 v1 相同；magic=`TPMWRAP2`、version=2、flags=2。
+flags=2 固定表示上述 SHA256 PCR0 + Unseal policy-only 模板，父模板仍为 1。
+policy digest 位于 TPM public blob 的 authPolicy 中；记录不包含对象密码、明文或 PCR 写入指令。
+解码会检查 policy-only public 的类型、SHA256、attributes、policy 长度与 scheme，拒绝 userWithAuth/password bypass。
+v1 密码记录继续使用原格式，不会自动改写。格式字段只是元数据，真正的密封完整性仍由 TPM 验证。
+
 ## Linux 调试（必须先 wrap --RT）
 
 必须是**原实机、原 TPM**，而不是 Windows WSL 的另一个 TPM。示例默认不绑定 PCR，因此启动 Linux 不会仅因 PCR 变化而拒绝解封。
@@ -128,6 +170,8 @@ public/private 可以复制，但固定 TPM/父对象绑定意味着不能拿到
 
 ```bash
 sudo python3 scripts/export-tpmops.py --out /root/tpmops-export
+# 导出 --pcr0 --RT 创建的独立 PCR0 记录：
+sudo python3 scripts/export-tpmops.py --pcr0 --out /root/tpmops-pcr0-export
 ```
 
 默认读取：
@@ -179,6 +223,7 @@ Linux 通过 `/dev/tpmrm0` 资源管理器操作，不要照搬测试脚本中�
 .\make-iso.cmd RELEASE
 wsl -d Ubuntu-24.04 --exec bash /mnt/d/Workspace/EDKII/scripts/test-tpmops-wire.sh
 wsl -d Ubuntu-24.04 --exec python3 /mnt/d/Workspace/EDKII/scripts/test-tpmops.py
+wsl -d Ubuntu-24.04 --exec python3 /mnt/d/Workspace/EDKII/scripts/test-tpmops-pcr0.py
 ```
 
 模拟集成测试额外依赖 Ubuntu 的 `swtpm tpm2-tools` 软件包。
@@ -188,6 +233,10 @@ wsl -d Ubuntu-24.04 --exec python3 /mnt/d/Workspace/EDKII/scripts/test-tpmops.py
 - 重启 QEMU 和 swtpm、复用永久 TPM state 与 VARS 后，原 blob 仍可解封。
 - Linux tpm2-tools 成功重建父对象、加载 UEFI 生成的 public/private，并解封出相同内容。
 - 错误授权仅在私有模拟 TPM 上测试，失败时没有输出明文；不修改实际 TPM 的 DA 配置。
+- PCR0：实际 EFI wrap/unwrap 无对象口令提示，独立 v2 变量、拒绝覆盖，并跨 QEMU/TPM 重启成功解封。
+- 私有 swtpm：实际 `TpmSeal.c` 的 policy digest 与 tpm2-tools 一致；工具可解封，空密码不能绕过。
+  仅在该私有模拟器 Extend PCR0 后确认解封失败、输出清零、没有 Unseal/重新 Create/密码回退。
+  **PCR Extend 只在测试脚本中，EFI 应用没有此操作，也没有访问实机 PCR。**
 - 日志和导出测试记录位于 `out/qemu-tpmops/<目标>/`。明文测试数据/授权均为公开的模拟测试值。
 - **没有在真实 TPM 上创建对象或写实机 NVRAM；需在目标硬件复测。**
 

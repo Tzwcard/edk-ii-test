@@ -20,6 +20,8 @@ typedef struct {
   UINT32 *Rc;
   UINTN MaxCommand;
   UINTN MaxResponse;
+  UINT32 PcrBanks;
+  BOOLEAN PolicyAuthorization;
   UINT8 Command[4096];
   UINT8 Response[4096];
   CURSOR Write;
@@ -131,6 +133,7 @@ STATIC BOOLEAN TwoB (
 
 STATIC VOID Start (IN OUT TPM_IO *Io, IN UINT32 CommandCode, IN BOOLEAN Session)
 {
+  Io->PolicyAuthorization = FALSE;
   TpmOpsWipe (Io->Command, sizeof (Io->Command));
   TpmOpsWipe (Io->Response, sizeof (Io->Response));
   Io->Write = (CURSOR){ Io->Command, Io->MaxCommand, 0, TRUE };
@@ -163,6 +166,7 @@ STATIC EFI_STATUS Submit (
   UINT8 *Flags;
   UINT32 CommandSize = (UINT32)Io->Write.Pos;
   UINTN Attempt;
+  UINT16 NonceSize;
 
   if (!Io->Write.Ok || (CommandSize > Io->MaxCommand)) {
     return EFI_BAD_BUFFER_SIZE;
@@ -206,7 +210,8 @@ STATIC EFI_STATUS Submit (
   Header = (CURSOR){ Io->Response, Length, 10, TRUE };
   if (HasHandle) {
     *Handle = Get32 (&Header);
-    if ((*Handle & 0xFF000000U) != 0x80000000U) {
+    if ((*Handle & 0xFF000000U) !=
+        (Be32 (Io->Command + 6) == TPM_CC_StartAuthSession ? 0x03000000U : 0x80000000U)) {
       *Handle = 0;
       return EFI_COMPROMISED_DATA;
     }
@@ -221,13 +226,14 @@ STATIC EFI_STATUS Submit (
     }
     *Parameters = (CURSOR){ Io->Response + Header.Pos, ParamSize, 0, TRUE };
     Auth = (CURSOR){ Io->Response + Header.Pos + ParamSize, Length - Header.Pos - ParamSize, 0, TRUE };
-    // Exactly one password response session: empty nonce and HMAC.
-    if (!TwoB (&Auth, NULL, 0, NULL) || (Auth.Pos != 2)) {
+    // One response authorization. Plain policy sessions have a SHA256 nonce
+    // but no HMAC; password sessions have neither. No encrypted parameters.
+    if (!TwoB (&Auth, NULL, 0, &NonceSize) || (NonceSize != (Io->PolicyAuthorization ? 34 : 2))) {
       return EFI_COMPROMISED_DATA;
     }
     Flags = Take (&Auth, 1);
     if ((Flags == NULL) || ((*Flags & ~1U) != 0) || !TwoB (&Auth, NULL, 0, NULL) ||
-        !Auth.Ok || (Auth.Pos != 5) || (Auth.Pos != Auth.Size))
+        !Auth.Ok || (Auth.Pos != (UINTN)NonceSize + 3) || (Auth.Pos != Auth.Size))
     {
       return EFI_COMPROMISED_DATA;
     }
@@ -259,6 +265,7 @@ STATIC EFI_STATUS Init (OUT TPM_IO *Io, IN EFI_TCG2_PROTOCOL *Tcg2, OUT UINT32 *
   Io->Rc = Rc;
   Io->MaxCommand = MIN ((UINTN)Cap.MaxCommandSize, sizeof (Io->Command));
   Io->MaxResponse = MIN ((UINTN)Cap.MaxResponseSize, sizeof (Io->Response));
+  Io->PcrBanks = Cap.ActivePcrBanks;
   return EFI_SUCCESS;
 }
 
@@ -321,10 +328,79 @@ STATIC BOOLEAN ValidBlob (IN CONST TPM_OPS_BLOB *Blob)
     (Be16 (Blob->Private) + 2 == Blob->PrivateSize);
 }
 
-EFI_STATUS
-TpmOpsWrap (
+STATIC BOOLEAN Pcr0Public (IN CONST TPM_OPS_BLOB *Blob)
+{
+  return ValidBlob (Blob) && Blob->Pcr0 && Blob->PublicSize >= 48 &&
+    Be16 (Blob->Public + 2) == TPM_ALG_KEYEDHASH && Be16 (Blob->Public + 4) == TPM_ALG_SHA256 &&
+    Be32 (Blob->Public + 6) == 0x12 && // fixedTPM|fixedParent; NO userWithAuth/password bypass
+    Be16 (Blob->Public + 10) == 32 && Be16 (Blob->Public + 44) == TPM_ALG_NULL &&
+    (UINTN)Be16 (Blob->Public + 46) + 48 == Blob->PublicSize;
+}
+
+// TPM computes both PCR composite and policy digest. No host crypto dependency.
+// Empty PolicyPCR.pcrDigest uses the selected PCR's CURRENT value, even in a
+// trial session (TPM2_PolicyPCR). Unseal also checks the PCR update counter.
+STATIC EFI_STATUS Pcr0Policy (IN OUT TPM_IO *Io, IN BOOLEAN Trial, OUT UINT32 *Handle, OUT UINT8 Digest[32])
+{
+  EFI_STATUS Status;
+  CURSOR Params;
+  UINT8 Nonce[34] = { 0 };
+  UINT16 Size;
+  UINTN Filled = 0;
+  UINT8 Type = Trial ? TPM_SE_TRIAL : TPM_SE_POLICY;
+  CONST UINT8 Selection[] = { 0,0,0,1, 0,0x0B, 3, 1,0,0 }; // SHA256 PCR0 only
+  if ((Io->PcrBanks & EFI_TCG2_BOOT_HASH_ALG_SHA256) == 0) { return EFI_UNSUPPORTED; }
+  // TPM GetRandom may return fewer bytes than requested. Never accept zero or
+  // overlong output; at most 32 successful requests can fill this nonce.
+  while (Filled < 32) {
+    Start (Io, TPM_CC_GetRandom, FALSE);
+    U16 (&Io->Write, (UINT16)(32 - Filled));
+    Status = Submit (Io, FALSE, FALSE, NULL, &Params);
+    if (EFI_ERROR (Status)) { goto Done; }
+    TwoB (&Params, Nonce, sizeof (Nonce), &Size);
+    if (!Params.Ok || Params.Pos != Params.Size || Size <= 2 || (UINTN)(Size - 2) > 32 - Filled) {
+      Status = EFI_COMPROMISED_DATA; goto Done;
+    }
+    CopyMem (Digest + Filled, Nonce + 2, Size - 2);
+    Filled += Size - 2;
+  }
+  Start (Io, TPM_CC_StartAuthSession, FALSE);
+  U32 (&Io->Write, TPM_RH_NULL); U32 (&Io->Write, TPM_RH_NULL); // unsalted, unbound
+  U16 (&Io->Write, 32); Put (&Io->Write, Digest, 32);
+  U16 (&Io->Write, 0); // encryptedSalt
+  Put (&Io->Write, &Type, 1); U16 (&Io->Write, TPM_ALG_NULL); U16 (&Io->Write, TPM_ALG_SHA256);
+  Status = Submit (Io, FALSE, TRUE, Handle, &Params);
+  if (EFI_ERROR (Status)) { goto Done; }
+  TwoB (&Params, Nonce, sizeof (Nonce), &Size);
+  if (!Params.Ok || Params.Pos != Params.Size || Size != 34) { Status = EFI_COMPROMISED_DATA; goto Done; }
+  Start (Io, TPM_CC_PolicyPCR, FALSE);
+  U32 (&Io->Write, *Handle); U16 (&Io->Write, 0); // current PCR digest, not a host-supplied guess
+  Put (&Io->Write, Selection, sizeof (Selection));
+  Status = Submit (Io, FALSE, FALSE, NULL, &Params);
+  if (EFI_ERROR (Status)) { goto Done; }
+  if (Params.Pos != Params.Size) { Status = EFI_COMPROMISED_DATA; goto Done; }
+  Start (Io, TPM_CC_PolicyCommandCode, FALSE);
+  U32 (&Io->Write, *Handle); U32 (&Io->Write, TPM_CC_Unseal);
+  Status = Submit (Io, FALSE, FALSE, NULL, &Params);
+  if (EFI_ERROR (Status)) { goto Done; }
+  if (Params.Pos != Params.Size) { Status = EFI_COMPROMISED_DATA; goto Done; }
+  Start (Io, TPM_CC_PolicyGetDigest, FALSE);
+  U32 (&Io->Write, *Handle);
+  Status = Submit (Io, FALSE, FALSE, NULL, &Params);
+  if (EFI_ERROR (Status)) { goto Done; }
+  TwoB (&Params, Nonce, sizeof (Nonce), &Size);
+  if (!Params.Ok || Params.Pos != Params.Size || Size != 34) { Status = EFI_COMPROMISED_DATA; goto Done; }
+  CopyMem (Digest, Nonce + 2, 32);
+Done:
+  TpmOpsWipe (Nonce, sizeof (Nonce));
+  return Status;
+}
+
+STATIC EFI_STATUS
+WrapInternal (
   IN EFI_TCG2_PROTOCOL *Tcg2, IN CONST UINT8 *Secret, IN UINTN SecretSize,
-  IN CONST UINT8 *Auth, IN UINTN AuthSize, OUT TPM_OPS_BLOB *Blob, OUT UINT32 *TpmRc
+  IN CONST UINT8 *Auth, IN UINTN AuthSize, OUT TPM_OPS_BLOB *Blob, OUT UINT32 *TpmRc,
+  IN BOOLEAN Pcr0
   )
 {
   TPM_IO Io;
@@ -332,16 +408,25 @@ TpmOpsWrap (
   EFI_STATUS Cleanup;
   CURSOR Params;
   UINT32 Parent = 0;
+  UINT32 Policy = 0;
+  UINT8 Digest[32] = { 0 };
   if ((Blob == NULL) || (Secret == NULL) || (SecretSize == 0) || (SecretSize > TPM_OPS_SECRET_MAX) ||
-      (Auth == NULL) || (AuthSize == 0) || (AuthSize > TPM_OPS_AUTH_MAX)) {
+      (!Pcr0 && ((Auth == NULL) || (AuthSize == 0) || (AuthSize > TPM_OPS_AUTH_MAX)))) {
     return EFI_INVALID_PARAMETER;
   }
   ZeroMem (Blob, sizeof (*Blob));
+  Blob->Pcr0 = Pcr0;
   Status = Init (&Io, Tcg2, TpmRc);
   if (EFI_ERROR (Status)) {
     return Status;
   }
-  Status = Primary (&Io, &Parent, Blob->ParentName, &Blob->NameSize);
+  if (Pcr0) {
+    Status = Pcr0Policy (&Io, TRUE, &Policy, Digest);
+    Cleanup = Flush (&Io, Policy);
+    Policy = 0;
+    if (!EFI_ERROR (Status)) { Status = Cleanup; }
+  }
+  if (!EFI_ERROR (Status)) { Status = Primary (&Io, &Parent, Blob->ParentName, &Blob->NameSize); }
   if (!EFI_ERROR (Status)) {
     Start (&Io, TPM_CC_Create, TRUE);
     U32 (&Io.Write, Parent);
@@ -349,7 +434,13 @@ TpmOpsWrap (
     U16 (&Io.Write, (UINT16)(4 + AuthSize + SecretSize));
     U16 (&Io.Write, (UINT16)AuthSize); Put (&Io.Write, Auth, AuthSize);
     U16 (&Io.Write, (UINT16)SecretSize); Put (&Io.Write, Secret, SecretSize);
-    Put (&Io.Write, mSealedPublic, sizeof (mSealedPublic));
+    if (Pcr0) {
+      U16 (&Io.Write, 46); // TPMT_PUBLIC length, including 32-byte authPolicy
+      U16 (&Io.Write, TPM_ALG_KEYEDHASH); U16 (&Io.Write, TPM_ALG_SHA256);
+      U32 (&Io.Write, 0x12); // fixedTPM|fixedParent, policy ONLY
+      U16 (&Io.Write, sizeof (Digest)); Put (&Io.Write, Digest, sizeof (Digest));
+      U16 (&Io.Write, TPM_ALG_NULL); U16 (&Io.Write, 0); // keyedHash scheme, unique
+    } else { Put (&Io.Write, mSealedPublic, sizeof (mSealedPublic)); }
     U16 (&Io.Write, 0); U32 (&Io.Write, 0);
     Status = Submit (&Io, TRUE, FALSE, NULL, &Params);
     if (!EFI_ERROR (Status)) {
@@ -357,7 +448,8 @@ TpmOpsWrap (
       TwoB (&Params, Blob->Public, sizeof (Blob->Public), &Blob->PublicSize);
       TwoB (&Params, NULL, 0, NULL); TwoB (&Params, NULL, 0, NULL);
       Take (&Params, 6); TwoB (&Params, NULL, 0, NULL);
-      if (!Params.Ok || (Params.Pos != Params.Size) || !ValidBlob (Blob)) {
+      if (!Params.Ok || (Params.Pos != Params.Size) || !ValidBlob (Blob) ||
+          (Pcr0 && (!Pcr0Public (Blob) || CompareMem (Blob->Public + 12, Digest, 32) != 0))) {
         Status = EFI_COMPROMISED_DATA;
       }
     }
@@ -367,6 +459,7 @@ TpmOpsWrap (
     Status = Cleanup;
   }
   TpmOpsWipe (&Io, sizeof (Io));
+  TpmOpsWipe (Digest, sizeof (Digest));
   if (EFI_ERROR (Status)) {
     TpmOpsWipe (Blob, sizeof (*Blob));
   }
@@ -374,10 +467,26 @@ TpmOpsWrap (
 }
 
 EFI_STATUS
-TpmOpsUnwrap (
+TpmOpsWrap (
+  IN EFI_TCG2_PROTOCOL *Tcg2, IN CONST UINT8 *Secret, IN UINTN SecretSize,
+  IN CONST UINT8 *Auth, IN UINTN AuthSize, OUT TPM_OPS_BLOB *Blob, OUT UINT32 *TpmRc
+  )
+{
+  return WrapInternal (Tcg2, Secret, SecretSize, Auth, AuthSize, Blob, TpmRc, FALSE);
+}
+
+EFI_STATUS
+TpmOpsWrapPcr0 (IN EFI_TCG2_PROTOCOL *Tcg2, IN CONST UINT8 *Secret, IN UINTN SecretSize,
+  OUT TPM_OPS_BLOB *Blob, OUT UINT32 *TpmRc)
+{
+  return WrapInternal (Tcg2, Secret, SecretSize, NULL, 0, Blob, TpmRc, TRUE);
+}
+
+STATIC EFI_STATUS
+UnwrapInternal (
   IN EFI_TCG2_PROTOCOL *Tcg2, IN CONST TPM_OPS_BLOB *Blob,
   IN CONST UINT8 *Auth, IN UINTN AuthSize, OUT UINT8 *Secret,
-  IN OUT UINTN *SecretSize, OUT UINT32 *TpmRc
+  IN OUT UINTN *SecretSize, OUT UINT32 *TpmRc, IN BOOLEAN Pcr0
   )
 {
   TPM_IO Io;
@@ -385,6 +494,8 @@ TpmOpsUnwrap (
   EFI_STATUS Cleanup;
   UINT32 Parent = 0;
   UINT32 Object = 0;
+  UINT32 Policy = 0;
+  UINT8 Digest[32] = { 0 };
   UINT8 Name[68];
   UINT16 NameSize = 0;
   CURSOR Params;
@@ -392,7 +503,8 @@ TpmOpsUnwrap (
   UINTN Size;
   UINTN Capacity;
 
-  if (!ValidBlob (Blob) || (Auth == NULL) || (AuthSize == 0) || (AuthSize > TPM_OPS_AUTH_MAX) ||
+  if (!ValidBlob (Blob) || Blob->Pcr0 != Pcr0 || (Pcr0 && !Pcr0Public (Blob)) ||
+      (!Pcr0 && ((Auth == NULL) || (AuthSize == 0) || (AuthSize > TPM_OPS_AUTH_MAX))) ||
       (Secret == NULL) || (SecretSize == NULL)) {
     return EFI_INVALID_PARAMETER;
   }
@@ -421,9 +533,22 @@ TpmOpsUnwrap (
       }
     }
   }
+  if (!EFI_ERROR (Status) && Pcr0) {
+    Status = Pcr0Policy (&Io, FALSE, &Policy, Digest);
+    if (!EFI_ERROR (Status) && CompareMem (Digest, Blob->Public + 12, 32) != 0) {
+      // Current PCR state differs. No Unseal attempt, no password fallback/reseal.
+      Status = EFI_SECURITY_VIOLATION;
+    }
+  }
   if (!EFI_ERROR (Status)) {
     Start (&Io, TPM_CC_Unseal, TRUE);
-    U32 (&Io.Write, Object); PasswordSession (&Io, Auth, AuthSize);
+    U32 (&Io.Write, Object);
+    if (Pcr0) {
+      UINT8 Flags = 1; // continueSession, so cleanup can explicitly Flush it
+      U32 (&Io.Write, 9); U32 (&Io.Write, Policy);
+      U16 (&Io.Write, 0); Put (&Io.Write, &Flags, 1); U16 (&Io.Write, 0);
+      Io.PolicyAuthorization = TRUE;
+    } else { PasswordSession (&Io, Auth, AuthSize); }
     Status = Submit (&Io, TRUE, FALSE, NULL, &Params);
     if (!EFI_ERROR (Status)) {
       Data = Take (&Params, 2);
@@ -440,16 +565,36 @@ TpmOpsUnwrap (
       }
     }
   }
+  Cleanup = Flush (&Io, Policy);
+  if (!EFI_ERROR (Status)) { Status = Cleanup; }
   Cleanup = Flush (&Io, Object);
   if (!EFI_ERROR (Status)) { Status = Cleanup; }
   Cleanup = Flush (&Io, Parent);
   if (!EFI_ERROR (Status)) { Status = Cleanup; }
   TpmOpsWipe (&Io, sizeof (Io));
+  TpmOpsWipe (Digest, sizeof (Digest));
   if (EFI_ERROR (Status)) {
     TpmOpsWipe (Secret, Capacity);
     if (Status != EFI_BUFFER_TOO_SMALL) { *SecretSize = 0; }
   }
   return Status;
+}
+
+EFI_STATUS
+TpmOpsUnwrap (
+  IN EFI_TCG2_PROTOCOL *Tcg2, IN CONST TPM_OPS_BLOB *Blob,
+  IN CONST UINT8 *Auth, IN UINTN AuthSize, OUT UINT8 *Secret,
+  IN OUT UINTN *SecretSize, OUT UINT32 *TpmRc
+  )
+{
+  return UnwrapInternal (Tcg2, Blob, Auth, AuthSize, Secret, SecretSize, TpmRc, FALSE);
+}
+
+EFI_STATUS
+TpmOpsUnwrapPcr0 (IN EFI_TCG2_PROTOCOL *Tcg2, IN CONST TPM_OPS_BLOB *Blob,
+  OUT UINT8 *Secret, IN OUT UINTN *SecretSize, OUT UINT32 *TpmRc)
+{
+  return UnwrapInternal (Tcg2, Blob, NULL, 0, Secret, SecretSize, TpmRc, TRUE);
 }
 
 STATIC UINT32 Le32 (IN CONST UINT8 *Data)
@@ -465,13 +610,13 @@ STATIC VOID PutLe32 (OUT UINT8 *Data, IN UINT32 Value)
 EFI_STATUS TpmOpsEncode (IN CONST TPM_OPS_BLOB *Blob, OUT UINT8 *Data, IN OUT UINTN *Size)
 {
   UINTN Needed;
-  if (!ValidBlob (Blob) || (Size == NULL)) { return EFI_INVALID_PARAMETER; }
+  if (!ValidBlob (Blob) || (Blob->Pcr0 && !Pcr0Public (Blob)) || (Size == NULL)) { return EFI_INVALID_PARAMETER; }
   Needed = TPM_OPS_HEADER_SIZE + Blob->NameSize + Blob->PublicSize + Blob->PrivateSize;
   if ((Data == NULL) || (*Size < Needed)) { *Size = Needed; return EFI_BUFFER_TOO_SMALL; }
   ZeroMem (Data, Needed);
-  CopyMem (Data, "TPMWRAP1", 8);
-  PutLe32 (Data + 8, 1); PutLe32 (Data + 12, TPM_OPS_HEADER_SIZE);
-  PutLe32 (Data + 16, 1); PutLe32 (Data + 20, 1); // auth-required, parent template ID
+  CopyMem (Data, Blob->Pcr0 ? "TPMWRAP2" : "TPMWRAP1", 8);
+  PutLe32 (Data + 8, Blob->Pcr0 ? 2 : 1); PutLe32 (Data + 12, TPM_OPS_HEADER_SIZE);
+  PutLe32 (Data + 16, Blob->Pcr0 ? 2 : 1); PutLe32 (Data + 20, 1); // PCR0 policy or auth-required; parent template ID
   PutLe32 (Data + 24, Blob->NameSize);
   PutLe32 (Data + 28, Blob->PublicSize); PutLe32 (Data + 32, Blob->PrivateSize);
   CopyMem (Data + TPM_OPS_HEADER_SIZE, Blob->ParentName, Blob->NameSize);
@@ -486,11 +631,13 @@ EFI_STATUS TpmOpsDecode (IN CONST UINT8 *Data, IN UINTN Size, OUT TPM_OPS_BLOB *
   UINT32 Name;
   UINT32 Public;
   UINT32 Private;
+  BOOLEAN Pcr0;
   if ((Data == NULL) || (Blob == NULL)) { return EFI_INVALID_PARAMETER; }
   ZeroMem (Blob, sizeof (*Blob));
+  Pcr0 = Size >= TPM_OPS_HEADER_SIZE && CompareMem (Data, "TPMWRAP2", 8) == 0;
   if ((Size < TPM_OPS_HEADER_SIZE) || (Size > TPM_OPS_BLOB_MAX) ||
-      (CompareMem (Data, "TPMWRAP1", 8) != 0) || (Le32 (Data + 8) != 1) ||
-      (Le32 (Data + 12) != TPM_OPS_HEADER_SIZE) || (Le32 (Data + 16) != 1) ||
+      (CompareMem (Data, Pcr0 ? "TPMWRAP2" : "TPMWRAP1", 8) != 0) || (Le32 (Data + 8) != (Pcr0 ? 2U : 1U)) ||
+      (Le32 (Data + 12) != TPM_OPS_HEADER_SIZE) || (Le32 (Data + 16) != (Pcr0 ? 2U : 1U)) ||
       (Le32 (Data + 20) != 1) || (Le32 (Data + 36) != 0)) {
     return EFI_COMPROMISED_DATA;
   }
@@ -501,8 +648,9 @@ EFI_STATUS TpmOpsDecode (IN CONST UINT8 *Data, IN UINTN Size, OUT TPM_OPS_BLOB *
     return EFI_COMPROMISED_DATA;
   }
   Blob->NameSize = (UINT16)Name; Blob->PublicSize = (UINT16)Public; Blob->PrivateSize = (UINT16)Private;
+  Blob->Pcr0 = Pcr0;
   CopyMem (Blob->ParentName, Data + TPM_OPS_HEADER_SIZE, Name);
   CopyMem (Blob->Public, Data + TPM_OPS_HEADER_SIZE + Name, Public);
   CopyMem (Blob->Private, Data + TPM_OPS_HEADER_SIZE + Name + Public, Private);
-  return ValidBlob (Blob) ? EFI_SUCCESS : EFI_COMPROMISED_DATA;
+  return ValidBlob (Blob) && (!Pcr0 || Pcr0Public (Blob)) ? EFI_SUCCESS : EFI_COMPROMISED_DATA;
 }

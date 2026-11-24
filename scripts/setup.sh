@@ -8,7 +8,9 @@ git -C "$ROOT" -c core.autocrlf=false submodule update --init --depth 1 -- edk2
 git -C "$ROOT/edk2" -c core.autocrlf=false submodule update --init --depth 1 \
   BaseTools/Source/C/BrotliCompress/brotli MdePkg/Library/MipiSysTLib/mipisyst \
   MdeModulePkg/Library/BrotliCustomDecompressLib/brotli \
-  SecurityPkg/DeviceSecurity/SpdmLib/libspdm
+  SecurityPkg/DeviceSecurity/SpdmLib/libspdm \
+  CryptoPkg/Library/OpensslLib/openssl \
+  CryptoPkg/Library/MbedTlsLib/mbedtls
 make -C "$ROOT/edk2/BaseTools" -j "${JOBS:-8}"
 source "$ROOT/scripts/env.sh"
 echo 'Setup complete. Run: bash scripts/build.sh'

@@ -1,0 +1,18 @@
+## @file
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+[Defines]
+  INF_VERSION    = 0x0001001B
+  BASE_NAME      = OpalPba
+  FILE_GUID      = 3E686C95-BBDD-4A19-87F6-E061AAFD77E6
+  MODULE_TYPE    = UEFI_APPLICATION
+  VERSION_STRING = 1.0
+  ENTRY_POINT    = UefiMain
+[Sources]
+  OpalPba.c
+[Packages]
+  MdePkg/MdePkg.dec
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  UefiLib
+  UefiBootServicesTableLib

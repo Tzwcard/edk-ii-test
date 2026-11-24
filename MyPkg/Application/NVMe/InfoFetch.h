@@ -6,20 +6,30 @@
 #include <Uefi.h>
 #include <Base.h>
 
+// Abilities
 #define NVME_INFO_ABILITY_FLAG_BIT_LEVEL_0_DISCOVERY BIT0
 #define NVME_INFO_ABILITY_FLAG_BIT_ATA_PASSTHRU      BIT1 // EF ATA password protocol
 
-#define NVME_INFO_SEC_FEATURE_OPAL_SSC               BIT0
+// Features
+#define NVME_INFO_SEC_FEATURE_TCG_LOCKING            BIT0
 #define NVME_INFO_SEC_FEATURE_ATA_SECURITY           BIT1
+#define NVME_INFO_SEC_FEATURE_TCG_MEDIA_ENC          BIT2
 
-#define NVME_INFO_ENABLED_OPAL_SSC                   BIT0
+// Security method enabled
+#define NVME_INFO_ENABLED_TCG_SECURIY                BIT0
 #define NVME_INFO_ENABLED_ATA_SECURITY               BIT1
 
-#define NVME_INFO_ARMED_OPAL_SSC                     BIT0
+// Security armed (Locked)
+#define NVME_INFO_ARMED_TCG_SECURITY                 BIT0
 #define NVME_INFO_ARMED_ATA_SECURITY                 BIT1
 
-#define NVME_INFO_SSC_VERSION_FLAG_V1                BIT1
-#define NVME_INFO_SSC_VERSION_FLAG_V2                BIT2
+// OPAL: Protocol version
+#define NVME_INFO_OPAL_SSC_VERSION_FLAG_V1           BIT1
+#define NVME_INFO_OPAL_SSC_VERSION_FLAG_V2           BIT2
+
+// PYRITE: Protocol version
+#define NVME_INFO_PYRITE_SSC_VERSION_FLAG_V1         BIT1
+#define NVME_INFO_PYRITE_SSC_VERSION_FLAG_V2         BIT2
 
 typedef struct {
   UINT8   Ok;
@@ -27,19 +37,29 @@ typedef struct {
   CHAR8   Model[41];
   CHAR8   Firmware[9];
   BOOLEAN SupportSecurityRecvSend;
-  UINT8   Ability;          // bit0: LV0_DISCOVERY, bit1: ATA Passthru
-  UINT16  SecurityFeature;  // bit0: TCG OPAL SSC, bit1: ATA Security
-  UINT8   IsEnabled;        // bit0: TCG LockingEnabled, bit1: ATA Security Enabled
-  UINT8   IsLocked;         // bit0: TCG Locked, bit1: ATA Security Locked
+  UINT8   Ability;          // See above: Abilities
+  UINT16  SecurityFeature;  // See above: Features
+
+  // Internally, the flag below is for all methods
+  // (TCG SSC and ATA Security)
+  // Use Opal over Pyrite if both available
+  // Then if none of them usable use ATA Security
+  UINT8   IsEnabled;        // See above: Security method enabled
+  UINT8   IsLocked;         // See above: Security armed
 
   // OPAL SEC specified info
   UINT8   OpalSSCVersionFlag;
 
+  // PYRITE SSC specified info
+  UINT8   PyriteSSCVersionFlag;
+
   // ATA Security specified
   BOOLEAN AtaFrozen;
 
-  // OPAL Encryption need a LBA range for lock/unlock
-  UINT64  LBA;
+  // OPAL/PYRITE have MBR Shadowing functionality in spec
+  // We can utilize it to show some error message if unlock/decrypt error
+  BOOLEAN MBRShadowAvailable;
+
 } NVME_DRIVE_INFO;
 
 // Read-only. On failure Ok=0; do not interpret partial security state as valid.

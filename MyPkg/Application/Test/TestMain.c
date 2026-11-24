@@ -66,14 +66,14 @@ TestNVMeInfoFetch (VOID)
     (UINT32)DriveInfo.Ok, (UINT32)DriveInfo.SupportSecurityRecvSend);
   Print (L"Ability: 0x%02x\r\nSecurityFeature: 0x%04x\r\n",
     (UINT32)DriveInfo.Ability, (UINT32)DriveInfo.SecurityFeature);
-  Print (L"IsEnabled: 0x%02x\r\nIsLocked: 0x%02x\r\nOpalSSCVersionFlag: 0x%02x\r\n",
-    (UINT32)DriveInfo.IsEnabled, (UINT32)DriveInfo.IsLocked, (UINT32)DriveInfo.OpalSSCVersionFlag);
+  Print (L"IsEnabled: 0x%02x\r\nIsLocked: 0x%02x\r\nOpalSSCVersionFlag: 0x%02x\r\nPyriteSSCVersionFlag: 0x%02x",
+    (UINT32)DriveInfo.IsEnabled, (UINT32)DriveInfo.IsLocked, (UINT32)DriveInfo.OpalSSCVersionFlag, (UINT32)DriveInfo.PyriteSSCVersionFlag);
   if (DriveInfo.SecurityFeature & NVME_INFO_SEC_FEATURE_ATA_SECURITY) {
     Print (L"AtaFrozen: %u\r\n", (UINT32)DriveInfo.AtaFrozen);
   } else {
     Print (L"AtaFrozen: N/A (ATA Security not reported as supported).\r\n");
   }
-  Print (L"State masks: bit0=TCG, bit1=ATA; zero alone is not proof of support.\r\n");
+  Print (L"MBR Shadow Available: %02x\r\n", DriveInfo.MBRShadowAvailable);
   return EFI_SUCCESS;
 }
 

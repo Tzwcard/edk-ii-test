@@ -28,6 +28,9 @@ cp "$ROOT/out/$TARGET/TPMOps.efi" "$STAGE/TPMOps.efi"
 cp "$ROOT/out/$TARGET/NVMeDisp.efi" "$STAGE/NVMeDisp.efi"
 cp "$ROOT/out/$TARGET/NVMeResetTest.efi" "$STAGE/NVMeResetTest.efi"
 cp "$ROOT/out/$TARGET/TestMain.efi" "$STAGE/TestMain.efi"
+cp "$ROOT/out/$TARGET/OpalTest.efi" "$STAGE/OpalTest.efi"
+cp "$ROOT/out/$TARGET/OpalPba.efi" "$STAGE/OpalPba.efi"
+cp "$ROOT/out/$TARGET/OpalPba.img" "$STAGE/OpalPba.img"
 # Shell scripts on the FAT boot image use DOS line endings.
 sed 's/\r$//; s/$/\r/' "$ROOT/iso/startup.nsh" > "$STAGE/startup.nsh"
 IMAGE="$STAGE/boot/efiboot.img"
@@ -47,6 +50,8 @@ mcopy -i "$IMAGE" "$STAGE/TPMOps.efi" ::/
 mcopy -i "$IMAGE" "$STAGE/NVMeDisp.efi" ::/
 mcopy -i "$IMAGE" "$STAGE/NVMeResetTest.efi" ::/
 mcopy -i "$IMAGE" "$STAGE/TestMain.efi" ::/
+mcopy -i "$IMAGE" "$STAGE/OpalTest.efi" ::/
+mcopy -i "$IMAGE" "$STAGE/OpalPba.efi" "$STAGE/OpalPba.img" ::/
 ISO="$ROOT/out/uefi-shell-x64-$TARGET.iso"
 xorriso -as mkisofs -R -J -V EDKII_SHELL \
   -e boot/efiboot.img -no-emul-boot -o "$ISO" "$STAGE"

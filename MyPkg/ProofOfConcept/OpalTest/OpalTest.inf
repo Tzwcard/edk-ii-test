@@ -1,0 +1,46 @@
+## @file
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+[Defines]
+  INF_VERSION    = 0x0001001B
+  BASE_NAME      = OpalTest
+  FILE_GUID      = 1836BEAB-6021-4ED1-A0CC-90954EAAE23D
+  MODULE_TYPE    = UEFI_APPLICATION
+  VERSION_STRING = 1.0
+  ENTRY_POINT    = UefiMain
+
+[Sources]
+  OpalTest.c
+  OpalOps.c
+  OpalOps.h
+  SedutilPin.c
+  SedutilPin.h
+  ../NVMeDisp/IdentifyData.c
+  ../NVMeDisp/IdentifyData.h
+
+[Packages]
+  MdePkg/MdePkg.dec
+  SecurityPkg/SecurityPkg.dec
+  CryptoPkg/CryptoPkg.dec
+
+[LibraryClasses]
+  UefiApplicationEntryPoint
+  UefiLib
+  UefiBootServicesTableLib
+  BaseLib
+  BaseMemoryLib
+  MemoryAllocationLib
+  DevicePathLib
+  DebugLib
+  TcgStorageOpalLib
+  TcgStorageCoreLib
+  BaseCryptLib
+
+[Protocols]
+  gEfiBlockIoProtocolGuid
+  gEfiStorageSecurityCommandProtocolGuid
+  gEfiDevicePathProtocolGuid
+  gEfiNvmExpressPassThruProtocolGuid
+  gEfiShellParametersProtocolGuid
+  gEfiLoadedImageProtocolGuid
+  gEfiSimpleFileSystemProtocolGuid

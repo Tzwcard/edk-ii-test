@@ -13,6 +13,7 @@ static unsigned Mode;
 static unsigned Calls;
 static unsigned Stalls;
 static UINT8 Fuzz[4096];
+static unsigned PolicyFault;
 
 VOID *EFIAPI ZeroMem (VOID *Data, UINTN Size) { return memset (Data, 0, Size); }
 VOID *EFIAPI CopyMem (VOID *To, CONST VOID *From, UINTN Size) { return memcpy (To, From, Size); }
@@ -28,6 +29,7 @@ static EFI_STATUS EFIAPI Stall (UINTN Time) { assert (Time == 100000); Stalls++;
 static EFI_STATUS EFIAPI Capability (EFI_TCG2_PROTOCOL *This, EFI_TCG2_BOOT_SERVICE_CAPABILITY *Cap) {
   (void)This;
   Cap->TPMPresentFlag = TRUE; Cap->MaxCommandSize = 4096; Cap->MaxResponseSize = 4096;
+  Cap->ActivePcrBanks = EFI_TCG2_BOOT_HASH_ALG_SHA256;
   return EFI_SUCCESS;
 }
 static EFI_STATUS EFIAPI Submit (
@@ -39,12 +41,37 @@ static EFI_STATUS EFIAPI Submit (
   Calls++;
   assert (be32 (Command + 2) == Size && Capacity == 4096);
   assert (Code == TPM_CC_CreatePrimary || Code == TPM_CC_FlushContext || Code == TPM_CC_Create ||
-          Code == TPM_CC_Load || Code == TPM_CC_Unseal);
+          Code == TPM_CC_Load || Code == TPM_CC_Unseal || Code == TPM_CC_GetRandom ||
+          Code == TPM_CC_StartAuthSession || Code == TPM_CC_PolicyPCR || Code == TPM_CC_PolicyCommandCode ||
+          Code == TPM_CC_PolicyGetDigest);
   if (Mode == 1) { return EFI_TIMEOUT; }
   memset (Response, 0, Capacity);
   Response[0] = 0x80; Response[1] = 1; put32 (Response + 2, 10);
   if (Code == TPM_CC_FlushContext) {
-    assert ((be32 (Command + 10) & 0xFF000000U) == 0x80000000U);
+    assert ((be32 (Command + 10) & 0xFF000000U) == 0x80000000U ||
+            (be32 (Command + 10) & 0xFF000000U) == 0x03000000U);
+    return EFI_SUCCESS;
+  }
+  if (Mode == 8) {
+    if (Code == TPM_CC_GetRandom) {
+      put32 (Response + 2, PolicyFault == 0 ? 12 : 44);
+      if (PolicyFault != 0) { Response[11] = 32; memset (Response + 12, 0xAA, 32); }
+    } else if (Code == TPM_CC_StartAuthSession) {
+      assert (Size == 59 && be32 (Command + 10) == TPM_RH_NULL && be32 (Command + 14) == TPM_RH_NULL);
+      assert (Command[54] == TPM_SE_TRIAL); // no policy-auth/password session fallback
+      put32 (Response + 10, 0x03000001);
+      put32 (Response + 2, PolicyFault == 1 ? 16 : 48);
+      if (PolicyFault != 1) { Response[15] = 32; memset (Response + 16, 0xBB, 32); }
+    } else if (Code == TPM_CC_PolicyPCR) {
+      static const UINT8 Expected[] = {0,0,0,1,0,0x0B,3,1,0,0};
+      assert (Size == 26 && Command[14] == 0 && Command[15] == 0 && memcmp (Command + 16, Expected, sizeof (Expected)) == 0);
+      if (PolicyFault == 2) { put32 (Response + 6, TPM_RC_VALUE); }
+    } else if (Code == TPM_CC_PolicyCommandCode) {
+      assert (Size == 18 && be32 (Command + 14) == TPM_CC_Unseal);
+      if (PolicyFault == 3) { put32 (Response + 6, TPM_RC_VALUE); }
+    } else if (Code == TPM_CC_PolicyGetDigest) {
+      put32 (Response + 2, 43); Response[11] = 31; // malformed SHA256 policy digest
+    } else { assert (0 && "policy failure must not reach CreatePrimary/Create/Unseal"); }
     return EFI_SUCCESS;
   }
   if (Mode == 2) { put32 (Response + 6, 0x98E); }
@@ -91,6 +118,21 @@ int main (void)
   assert (memcmp (Record, "TPMWRAP1", 8) == 0 && Record[12] == 40);
   assert (TpmOpsDecode (Record, Size, &Decoded) == EFI_SUCCESS);
   assert (memcmp (&Blob, &Decoded, sizeof (Blob)) == 0);
+  // PCR0 v2 is separate and cannot silently downgrade to password mode.
+  Blob.Pcr0 = TRUE; memset (Blob.Public, 0, sizeof (Blob.Public));
+  Blob.PublicSize = 48; Blob.Public[1] = 46; Blob.Public[3] = 8; Blob.Public[5] = 0x0B;
+  Blob.Public[9] = 0x12; Blob.Public[11] = 32; Blob.Public[45] = 0x10;
+  memset (Blob.Public + 12, 0x42, 32);
+  Size = sizeof (Copy);
+  assert (TpmOpsEncode (&Blob, Copy, &Size) == EFI_SUCCESS && memcmp (Copy, "TPMWRAP2", 8) == 0);
+  assert (Copy[8] == 2 && Copy[16] == 2 && TpmOpsDecode (Copy, Size, &Decoded) == EFI_SUCCESS && Decoded.Pcr0);
+  Blob.Public[9] |= 0x40; // userWithAuth would provide a forbidden password bypass
+  assert (TpmOpsEncode (&Blob, Copy, &Size) == EFI_INVALID_PARAMETER);
+  Blob.Public[9] = 0x12;
+  assert (TpmOpsUnwrap (&Protocol, &Blob, Auth, 8, Secret, &Size, &Rc) == EFI_INVALID_PARAMETER && Calls == 0);
+  assert (TpmOpsDecode (Record, Needed, &Blob) == EFI_SUCCESS && !Blob.Pcr0);
+  assert (TpmOpsUnwrapPcr0 (&Protocol, &Blob, Secret, &Size, &Rc) == EFI_INVALID_PARAMETER && Calls == 0);
+  Size = Needed;
   assert (TpmOpsDecode (Record, Size - 1, &Decoded) == EFI_COMPROMISED_DATA);
   assert (TpmOpsDecode (NULL, Size, &Decoded) == EFI_INVALID_PARAMETER);
   memcpy (Copy, Record, Size); Copy[16] = 0;
@@ -117,6 +159,15 @@ int main (void)
   assert (TpmOpsUnwrap (&Protocol, &Blob, Auth, 8, Secret, &Size, &Rc) == EFI_DEVICE_ERROR && Size == 0);
   for (Index = 0; Index < sizeof (Secret); Index++) { assert (Secret[Index] == 0); }
 
+  Mode = 8;
+  for (PolicyFault = 0; PolicyFault < 5; PolicyFault++) {
+    Calls = Stalls = 0;
+    Status = TpmOpsWrapPcr0 (&Protocol, Auth, sizeof (Auth), &Decoded, &Rc);
+    assert (EFI_ERROR (Status) && Stalls == 0);
+    assert (Calls == (PolicyFault == 0 ? 1U : PolicyFault == 1 ? 3U : PolicyFault + 2));
+    assert (!Decoded.Pcr0 && Decoded.PublicSize == 0); // failed wrap never yields a record
+  }
+
   for (Test = 0; Test < 10000; Test++) {
     for (Index = 0; Index < sizeof (Copy); Index++) {
       Seed = Seed * 1664525U + 1013904223U;
@@ -138,5 +189,6 @@ int main (void)
   }
   puts ("PASS: blob codec, response bounds, auth failures without retry, bounded busy retry and cleanup.");
   puts ("PASS: 10000 malformed records and 10000 mocked TPM responses under sanitizers; no hardware access.");
+  puts ("PASS: PCR0 v2 codec/mode isolation, password-bypass attributes rejected, policy wire fields, malformed nonce/digest cleanup and no failure retry.");
   return 0;
 }

@@ -15,7 +15,7 @@ cert = Path(subprocess.check_output(
     ["bash", str(root / "scripts/sign-efi.sh"), "--cert-path"], text=True
 ).strip())
 iso = root / "out" / f"uefi-shell-x64-{target}.iso"
-apps = ("HelloWorld", "PCRRead", "TCGOpalCheck", "AtaPassUtil", "SMARTDisp", "UEFINVTest", "TPMOps", "NVMeDisp", "NVMeResetTest", "TestMain")
+apps = ("HelloWorld", "PCRRead", "TCGOpalCheck", "AtaPassUtil", "SMARTDisp", "UEFINVTest", "TPMOps", "NVMeDisp", "NVMeResetTest", "TestMain", "OpalTest", "OpalPba")
 
 
 def run(*args):
@@ -64,13 +64,25 @@ with tempfile.TemporaryDirectory(prefix="efi-signatures-", dir=tests) as tempora
             "-extract", f"/{app}.efi", iso_root_copy)
         same(output, iso_root_copy)
 
+    pba_image = root / "out" / target / "OpalPba.img"
+    pba_loader = temp / "pba-BOOTX64.EFI"
+    run("mcopy", "-i", str(pba_image) + "@@1048576", "::/EFI/BOOT/BOOTX64.EFI", pba_loader)
+    verify(pba_loader)
+    same(pba_loader, root / "out" / target / "OpalPba.efi")
+    fat_pba = temp / "fat-OpalPba.img"
+    run("mcopy", "-i", boot_image, "::/OpalPba.img", fat_pba)
+    same(pba_image, fat_pba)
+    iso_pba = temp / "iso-OpalPba.img"
+    run("xorriso", "-osirrox", "on", "-indev", iso, "-extract", "/OpalPba.img", iso_pba)
+    same(pba_image, iso_pba)
+
     # A missing key must fail, without replacing a previously signed output.
     sentinel = temp / "unchanged.efi"
     sentinel.write_bytes(b"must remain unchanged")
     environment = dict(os.environ, EFI_SIGN_KEY=str(temp / "missing-private-key"))
     result = subprocess.run(
         ["bash", str(root / "scripts/sign-efi.sh"),
-         str(root / "Build" / "MyPkg" / f"{target}_GCC" / "X64" / "HelloWorld.efi"),
+          str(root / "Build" / "MyPkg" / f"{target}_GCC" / "X64" / "HelloWorld.efi"),
          str(sentinel)],
         env=environment, capture_output=True, text=True,
     )
@@ -79,5 +91,6 @@ with tempfile.TemporaryDirectory(prefix="efi-signatures-", dir=tests) as tempora
 
 print(f"PASS: {target} Shell + {len(apps)} apps match the signing certificate.")
 print("PASS: ISO root and embedded FAT boot-image copies match the verified outputs.")
+print("PASS: PBA image contains the signed loader; image copies in ISO root/FAT match.")
 print("PASS: missing signing key fails without overwriting the existing output.")
 print("This verifies signatures, not enrollment into firmware db or MOK.")

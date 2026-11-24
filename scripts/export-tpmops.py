@@ -12,9 +12,12 @@ parser = argparse.ArgumentParser(description=__doc__)
 source = parser.add_mutually_exclusive_group()
 source.add_argument("--efivar", type=Path,
                     help="efivarfs file, including its 4-byte attribute prefix (default: real TPMTest efivar)")
-source.add_argument("--record", type=Path, help="raw TPMWRAP1 record, WITHOUT efivarfs attributes")
+source.add_argument("--record", type=Path, help="raw TPMWRAP1/2 record, WITHOUT efivarfs attributes")
+parser.add_argument("--pcr0", action="store_true", help="select the separate PCR0 efivar (record mode is detected from header)")
 parser.add_argument("--out", type=Path, default=root / "out/tpmops-export")
 args = parser.parse_args()
+if args.pcr0:
+    NAME = f"TPMTest-PCR0-{{{GUID}}}"
 
 attributes = None
 if args.record:
@@ -29,10 +32,11 @@ else:
         raise SystemExit(f"Unexpected attributes: 0x{attributes:08x}")
     data = raw[4:]
 
-if not 40 <= len(data) <= 2200 or data[:8] != b"TPMWRAP1":
+if not 40 <= len(data) <= 2200 or data[:8] not in (b"TPMWRAP1", b"TPMWRAP2"):
     raise SystemExit("Invalid TPMOps record header/length")
 version, header, flags, template, name_len, public_len, private_len, reserved = struct.unpack_from("<8I", data, 8)
-if (version, header, flags, template, reserved) != (1, 40, 1, 1, 0):
+pcr0 = data[:8] == b"TPMWRAP2"
+if (version, header, flags, template, reserved) != (2 if pcr0 else 1, 40, 2 if pcr0 else 1, 1, 0):
     raise SystemExit("Unsupported record version, flags or parent template")
 if name_len != 36 or not 2 <= public_len <= 1024 or not 2 <= private_len <= 1024:
     raise SystemExit("Invalid blob sizes")
@@ -46,6 +50,12 @@ for label, item in (("name", name), ("public", public), ("private", private)):
         raise SystemExit(f"Invalid TPM2B size: {label}")
 if name[2:4] != b"\x00\x0b":
     raise SystemExit("Parent name is not SHA256")
+if pcr0:
+    if (len(public) < 48 or public[2:6] != b"\x00\x08\x00\x0b" or
+            int.from_bytes(public[6:10], "big") != 0x12 or public[10:12] != b"\x00\x20" or
+            public[44:46] != b"\x00\x10" or int.from_bytes(public[46:48], "big") + 48 != len(public)):
+        raise SystemExit("Invalid policy-only PCR0 public area")
+    NAME = f"TPMTest-PCR0-{{{GUID}}}"
 
 outputs = {
     "public.bin": public,
@@ -55,7 +65,8 @@ outputs = {
     "metadata.json": (json.dumps({
         "variable": NAME, "vendor_guid": GUID, "attributes": attributes,
         "parent_hierarchy": "owner", "parent_template": 1,
-        "parent_name": name[2:].hex(), "object_auth_required": True, "pcr_policy": None,
+        "parent_name": name[2:].hex(), "object_auth_required": not pcr0,
+        "pcr_policy": {"bank": "sha256", "pcr": 0, "command": "Unseal", "auth_policy": public[12:44].hex()} if pcr0 else None,
     }, indent=2) + "\n").encode(),
 }
 args.out.mkdir(parents=True, exist_ok=True)

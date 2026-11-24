@@ -7,13 +7,13 @@
 #include <IndustryStandard/TcgStorageOpal.h>
 #include <Protocol/NvmExpressPassthru.h>
 #include <Library/BaseMemoryLib.h>
+#include <Library/DebugLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiLib.h>
 #include "../Util/ValueAccess.h"
 #include "Uefi/UefiBaseType.h"
 #include "InfoFetch.h"
-
 
 // per 100ns -> 5s
 #define NVME_COMMAND_TIMEOUT   (5ULL * 1000 * 1000 * 10)
@@ -46,7 +46,7 @@ NVMeFetchIdentifyInfo (OUT UINT8 *Buffer, IN EFI_NVM_EXPRESS_PASS_THRU_PROTOCOL 
   Command.Flags       = CDW10_VALID;
 
   Packet.QueueType      = NVME_ADMIN_QUEUE;
-  Packet.CommandTimeout = NVME_COMMAND_TIMEOUT;  // per 100ns -> 5s
+  Packet.CommandTimeout = NVME_COMMAND_TIMEOUT;
   Packet.NvmeCmd        = &Command;
   Packet.NvmeCompletion = &Completion;
   Packet.TransferBuffer = Buffer;
@@ -54,7 +54,7 @@ NVMeFetchIdentifyInfo (OUT UINT8 *Buffer, IN EFI_NVM_EXPRESS_PASS_THRU_PROTOCOL 
   
   Status = Nvme->PassThru (Nvme, 0, &Packet, NULL);
   if (EFI_ERROR (Status)) {
-    Print (L"PassThru failed: %r\r\n", Status);
+    DEBUG ((DEBUG_ERROR, "PassThru failed: %r\n", Status));
     return Status;
   }
   if (Status != EFI_SUCCESS) { return EFI_DEVICE_ERROR; }
@@ -62,13 +62,13 @@ NVMeFetchIdentifyInfo (OUT UINT8 *Buffer, IN EFI_NVM_EXPRESS_PASS_THRU_PROTOCOL 
   // Sct -> Status code type, Sc -> Status code
   CopyMem (&Cq, &Completion, sizeof (Cq));
   if (Cq.Sct != 0 || Cq.Sc != 0) {
-    Print (L"Command failed: SCT=%u SC=0x%02x\r\n", (UINT32)Cq.Sct, (UINT32)Cq.Sc);
+    DEBUG ((DEBUG_ERROR, "Command failed: SCT=%u SC=0x%02x\n", (UINT32)Cq.Sct, (UINT16)Cq.Sc));
     return EFI_DEVICE_ERROR;
   }
 
   if (Packet.TransferLength != NVME_TRANSFER_SIZE_MAX) {
-    Print (L"Unexpected Identify length: %u / %u bytes\r\n",
-          Packet.TransferLength, (UINT32)NVME_TRANSFER_SIZE_MAX);
+    DEBUG ((DEBUG_ERROR, "Unexpected Identify length: %u / %u bytes\r\n",
+          Packet.TransferLength, (UINT32)NVME_TRANSFER_SIZE_MAX));
     return EFI_COMPROMISED_DATA;
   }
 
@@ -118,10 +118,11 @@ NVMeSecurityReceive (
 
   CopyMem (&Cq, &Completion, sizeof (Cq));
   if (Cq.Sct != 0 || Cq.Sc != 0) {
-    Print (L"Security Receive failed: SCT=%u SC=0x%02x\r\n", (UINT32)Cq.Sct, (UINT32)Cq.Sc);
+    DEBUG ((DEBUG_ERROR, "Security Receive failed: SCT=%u SC=0x%02x\n", (UINT32)Cq.Sct, (UINT16)Cq.Sc));
     return EFI_DEVICE_ERROR;
   }
   if (Packet.TransferLength == 0 || Packet.TransferLength > Requested) {
+    DEBUG ((DEBUG_ERROR, "Packet size error, %u / %u\n", Packet.TransferLength, Requested));
     return EFI_COMPROMISED_DATA;
   }
   *Length = Packet.TransferLength;
@@ -195,17 +196,20 @@ NVMeOPALDiscoveryParse (IN OUT NVME_DRIVE_INFO *Info, IN CONST UINT8 *Buffer, IN
 
   UINT16           Code = 0;
   UINT8   DescriptorLen = 0;
+  UINT8          TempU8 = 0;
 
   UINT32     CurrentPos = 0;
   
   if (Buffer == NULL || Info == NULL || Size < sizeof (TCG_LEVEL0_DISCOVERY_HEADER)) { return FALSE; }
   Parsed = *Info;
-  Parsed.SecurityFeature    &= (UINT16)~NVME_INFO_SEC_FEATURE_OPAL_SSC;
-  Parsed.IsEnabled          &= (UINT8)~NVME_INFO_ENABLED_OPAL_SSC;
-  Parsed.IsLocked           &= (UINT8)~NVME_INFO_ARMED_OPAL_SSC;
-  Parsed.OpalSSCVersionFlag  = 0;
+  Parsed.SecurityFeature      &= (UINT16)~(NVME_INFO_SEC_FEATURE_TCG_LOCKING | NVME_INFO_SEC_FEATURE_TCG_MEDIA_ENC);
+  Parsed.IsEnabled            &= (UINT8)~NVME_INFO_ENABLED_TCG_SECURIY;
+  Parsed.IsLocked             &= (UINT8)~NVME_INFO_ARMED_TCG_SECURITY;
+  Parsed.OpalSSCVersionFlag    = 0;
+  Parsed.PyriteSSCVersionFlag  = 0;
 
   // https://medias.cdn.trustedcomputinggroup.org/production/TCG_Storage_Opal_SSC_v2_30_pub_f4e29a2c4b.pdf
+  // https://medias.cdn.trustedcomputinggroup.org/production/TCG_Storage_Pyrite_SSC_v2p01_r1p00_pub_9fc9af0075.pdf
   // Basically, header 0x30 -> [DescriptorA][DescriptorB]...
   ParameterSize = GetBe32(Buffer);
   
@@ -228,19 +232,22 @@ NVMeOPALDiscoveryParse (IN OUT NVME_DRIVE_INFO *Info, IN CONST UINT8 *Buffer, IN
           return FALSE;
         }
 
-        // Check MediaEncryption and Locking Support, pdf said SSC compliant 
-        // device should have both of them set to 1
-        if ((Buffer[CurrentPos + 4] & BIT0) && (Buffer[CurrentPos + 4] & BIT3)) {
-          Parsed.SecurityFeature |= NVME_INFO_SEC_FEATURE_OPAL_SSC;
+        // Split the flags since OPAL SHOULD have ME&LK
+        // While Pyrite only have LK, ME not available
+        TempU8 = Buffer[CurrentPos + 4];
+
+        Parsed.SecurityFeature |= ((TempU8 & BIT0) ? NVME_INFO_SEC_FEATURE_TCG_LOCKING   : 0)
+                                | ((TempU8 & BIT3) ? NVME_INFO_SEC_FEATURE_TCG_MEDIA_ENC : 0);
+
+        if (TempU8 & BIT1) {
+          Parsed.IsEnabled |= NVME_INFO_ENABLED_TCG_SECURIY;
         }
 
-        if (Buffer[CurrentPos + 4] & BIT1) {
-          Parsed.IsEnabled |= NVME_INFO_ENABLED_OPAL_SSC;
+        if (TempU8 & BIT2) {
+          Parsed.IsLocked |= NVME_INFO_ARMED_TCG_SECURITY;
         }
 
-        if (Buffer[CurrentPos + 4] & BIT2) {
-          Parsed.IsLocked |= NVME_INFO_ARMED_OPAL_SSC;
-        }
+        Parsed.MBRShadowAvailable = (TempU8 & BIT6) == 0;
         break;
         
       // We're gonna use SSC V1 and V2 only
@@ -249,7 +256,7 @@ NVMeOPALDiscoveryParse (IN OUT NVME_DRIVE_INFO *Info, IN CONST UINT8 *Buffer, IN
           return FALSE;
         }
         
-        Parsed.OpalSSCVersionFlag |= NVME_INFO_SSC_VERSION_FLAG_V1;
+        Parsed.OpalSSCVersionFlag |= NVME_INFO_OPAL_SSC_VERSION_FLAG_V1;
 
         break;
       case TCG_FEATURE_OPAL_SSC_V2_0_0:
@@ -257,7 +264,23 @@ NVMeOPALDiscoveryParse (IN OUT NVME_DRIVE_INFO *Info, IN CONST UINT8 *Buffer, IN
           return FALSE;
         }
         
-        Parsed.OpalSSCVersionFlag |= NVME_INFO_SSC_VERSION_FLAG_V2;
+        Parsed.OpalSSCVersionFlag |= NVME_INFO_OPAL_SSC_VERSION_FLAG_V2;
+
+        break;
+      case TCG_FEATURE_PYRITE_SSC:
+        if (DescriptorLen < sizeof (PYRITE_SSC_FEATURE_DESCRIPTOR) - 4) {
+          return FALSE;
+        }
+        
+        Parsed.PyriteSSCVersionFlag |= NVME_INFO_PYRITE_SSC_VERSION_FLAG_V1;
+
+        break;
+      case TCG_FEATURE_PYRITE_SSC_V2_0_0:
+        if (DescriptorLen < sizeof (PYRITE_SSCV2_FEATURE_DESCRIPTOR) - 4) {
+          return FALSE;
+        }
+        
+        Parsed.PyriteSSCVersionFlag |= NVME_INFO_PYRITE_SSC_VERSION_FLAG_V2;
 
         break;
       default:
@@ -372,7 +395,7 @@ NVMeGetControllerInfo(OUT NVME_DRIVE_INFO *Info, IN EFI_HANDLE Handle)
       Status = EFI_COMPROMISED_DATA;
     }
     if (EFI_ERROR (Status)) {
-      Print (L"OPAL Discovery failed: %r\r\n", Status);
+      DEBUG ((DEBUG_ERROR, "OPAL Discovery failed: %r\n", Status));
       FirstError = Status;
     }
   }
@@ -385,7 +408,7 @@ NVMeGetControllerInfo(OUT NVME_DRIVE_INFO *Info, IN EFI_HANDLE Handle)
       Status = EFI_COMPROMISED_DATA;
     }
     if (EFI_ERROR (Status)) {
-      Print (L"ATA Security query failed: %r\r\n", Status);
+      DEBUG ((DEBUG_ERROR, "ATA Security query failed: %r\n", Status));
       if (!EFI_ERROR (FirstError)) { FirstError = Status; }
     }
   }

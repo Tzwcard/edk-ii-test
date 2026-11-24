@@ -13,6 +13,7 @@
 #define TPM_OPS_HEADER_SIZE  40
 
 typedef struct {
+  BOOLEAN Pcr0; // v2: policy-only SHA256 PCR0 + PolicyCommandCode(Unseal).
   UINT16 NameSize;
   UINT16 PublicSize;
   UINT16 PrivateSize;
@@ -30,6 +31,14 @@ EFI_STATUS TpmOpsUnwrap (
   IN EFI_TCG2_PROTOCOL *Tcg2, IN CONST TPM_OPS_BLOB *Blob,
   IN CONST UINT8 *Auth, IN UINTN AuthSize, OUT UINT8 *Secret,
   IN OUT UINTN *SecretSize, OUT UINT32 *TpmRc
+  );
+EFI_STATUS TpmOpsWrapPcr0 (
+  IN EFI_TCG2_PROTOCOL *Tcg2, IN CONST UINT8 *Secret, IN UINTN SecretSize,
+  OUT TPM_OPS_BLOB *Blob, OUT UINT32 *TpmRc
+  );
+EFI_STATUS TpmOpsUnwrapPcr0 (
+  IN EFI_TCG2_PROTOCOL *Tcg2, IN CONST TPM_OPS_BLOB *Blob,
+  OUT UINT8 *Secret, IN OUT UINTN *SecretSize, OUT UINT32 *TpmRc
   );
 EFI_STATUS TpmOpsEncode (IN CONST TPM_OPS_BLOB *Blob, OUT UINT8 *Data, IN OUT UINTN *Size);
 EFI_STATUS TpmOpsDecode (IN CONST UINT8 *Data, IN UINTN Size, OUT TPM_OPS_BLOB *Blob);

@@ -5,7 +5,7 @@ mkdir -p "$ROOT/out/tests"
 gcc -std=c11 -Wall -Wextra -Werror -fshort-wchar -g \
   -fsanitize=address,undefined -fno-omit-frame-pointer \
   -I "$ROOT/edk2/MdePkg/Include" -I "$ROOT/edk2/MdePkg/Include/X64" \
-  -I "$ROOT/MyPkg/Application/ProofOfConcept/NVMeDisp" \
-  "$ROOT/tests/nvme-identify-test.c" "$ROOT/MyPkg/Application/ProofOfConcept/NVMeDisp/IdentifyData.c" \
+  -I "$ROOT/MyPkg/ProofOfConcept/NVMeDisp" \
+  "$ROOT/tests/nvme-identify-test.c" "$ROOT/MyPkg/ProofOfConcept/NVMeDisp/IdentifyData.c" \
   -o "$ROOT/out/tests/nvme-identify-test"
 "$ROOT/out/tests/nvme-identify-test"

@@ -10,7 +10,9 @@
 #include <Library/UefiRuntimeServicesTableLib.h>
 #include <Library/UefiLib.h>
 
-STATIC CHAR16 mVariableName[] = L"TPMTest-{a4e9a95e-5fde-4bcb-9f44-2b487f03395d}";
+STATIC CHAR16 mPasswordVariable[] = L"TPMTest-{a4e9a95e-5fde-4bcb-9f44-2b487f03395d}";
+STATIC CHAR16 mPcr0Variable[] = L"TPMTest-PCR0-{a4e9a95e-5fde-4bcb-9f44-2b487f03395d}";
+STATIC CHAR16 *mVariableName = mPasswordVariable;
 STATIC EFI_GUID mVendorGuid = {
   0xa4e9a95e, 0x5fde, 0x4bcb, { 0x9f, 0x44, 0x2b, 0x48, 0x7f, 0x03, 0x39, 0x5d }
 };
@@ -99,7 +101,7 @@ ReportTpm (IN EFI_STATUS Status, IN UINT32 Rc)
 }
 
 STATIC EFI_STATUS
-Wrap (IN BOOLEAN Runtime)
+Wrap (IN BOOLEAN Runtime, IN BOOLEAN Pcr0)
 {
   EFI_STATUS Status;
   EFI_TCG2_PROTOCOL *Tcg2;
@@ -132,19 +134,25 @@ Wrap (IN BOOLEAN Runtime)
   }
   Status = OpenTpm (&Tcg2);
   if (EFI_ERROR (Status)) { goto Done; }
-  Status = ReadAuth (L"New object authorization", Auth, &AuthSize);
-  if (EFI_ERROR (Status)) { goto Done; }
-  Status = ReadAuth (L"Confirm authorization", Confirmation, &ConfirmationSize);
-  if (EFI_ERROR (Status)) { goto Done; }
-  if ((AuthSize != ConfirmationSize) || (CompareMem (Auth, Confirmation, AuthSize) != 0)) {
-    Print (L"Authorization mismatch; nothing written.\r\n"); Status = EFI_INVALID_PARAMETER; goto Done;
+  if (!Pcr0) {
+    Status = ReadAuth (L"New object authorization", Auth, &AuthSize);
+    if (EFI_ERROR (Status)) { goto Done; }
+    Status = ReadAuth (L"Confirm authorization", Confirmation, &ConfirmationSize);
+    if (EFI_ERROR (Status)) { goto Done; }
+    if ((AuthSize != ConfirmationSize) || (CompareMem (Auth, Confirmation, AuthSize) != 0)) {
+      Print (L"Authorization mismatch; nothing written.\r\n"); Status = EFI_INVALID_PARAMETER; goto Done;
+    }
   }
   TpmOpsWipe (Confirmation, sizeof (Confirmation));
-  Status = TpmOpsWrap (Tcg2, mExampleSecret, sizeof (mExampleSecret), Auth, AuthSize, &Blob, &Rc);
+  if (Pcr0) {
+    Print (L"Policy-only: current SHA256 PCR0 + Unseal command; no object password or fallback.\r\n");
+    Status = TpmOpsWrapPcr0 (Tcg2, mExampleSecret, sizeof (mExampleSecret), &Blob, &Rc);
+  } else { Status = TpmOpsWrap (Tcg2, mExampleSecret, sizeof (mExampleSecret), Auth, AuthSize, &Blob, &Rc); }
   ReportTpm (Status, Rc);
   if (EFI_ERROR (Status)) { goto Done; }
   // Verify a fresh recreate-primary/load/unseal cycle BEFORE committing to NVRAM.
-  Status = TpmOpsUnwrap (Tcg2, &Blob, Auth, AuthSize, Secret, &SecretSize, &Rc);
+  Status = Pcr0 ? TpmOpsUnwrapPcr0 (Tcg2, &Blob, Secret, &SecretSize, &Rc) :
+    TpmOpsUnwrap (Tcg2, &Blob, Auth, AuthSize, Secret, &SecretSize, &Rc);
   ReportTpm (Status, Rc);
   if (EFI_ERROR (Status)) { goto Done; }
   if ((SecretSize != sizeof (mExampleSecret)) || (CompareMem (Secret, mExampleSecret, SecretSize) != 0)) {
@@ -174,7 +182,7 @@ Done:
 }
 
 STATIC EFI_STATUS
-StoredOperation (IN CONST CHAR16 *Command)
+StoredOperation (IN CONST CHAR16 *Command, IN BOOLEAN Pcr0)
 {
   EFI_STATUS Status;
   EFI_TCG2_PROTOCOL *Tcg2;
@@ -201,17 +209,25 @@ StoredOperation (IN CONST CHAR16 *Command)
   }
   Status = TpmOpsDecode (Raw, Size, &Blob);
   if (EFI_ERROR (Status)) { Print (L"Invalid wrapped record; refusing to load it.\r\n"); goto Done; }
-  Print (L"Record v1: parent-template=1, name=%u, public=%u, private=%u bytes; object-auth required, no PCR policy.\r\n",
-    (UINT32)Blob.NameSize, (UINT32)Blob.PublicSize, (UINT32)Blob.PrivateSize);
+  if (Blob.Pcr0 != Pcr0) { Print (L"Record authorization mode mismatch; no fallback.\r\n"); Status = EFI_SECURITY_VIOLATION; goto Done; }
+  Print (L"Record v%u: parent-template=1, name=%u, public=%u, private=%u bytes.\r\n",
+    Pcr0 ? 2U : 1U, (UINT32)Blob.NameSize, (UINT32)Blob.PublicSize, (UINT32)Blob.PrivateSize);
+  Print (Pcr0 ? L"Policy-only: SHA256 PCR0 + Unseal command; no object password.\r\n" :
+    L"Object-auth required, no PCR policy.\r\n");
   if (StrCmp (Command, L"info") == 0) { goto Done; }
   if (StrCmp (Command, L"dump") == 0) {
     Print (L"TPMOPS_BLOB_BEGIN\r\n"); Hex (Raw, Size); Print (L"TPMOPS_BLOB_END\r\n"); goto Done;
   }
   Status = OpenTpm (&Tcg2);
   if (EFI_ERROR (Status)) { goto Done; }
-  Status = ReadAuth (L"Object authorization", Auth, &AuthSize);
-  if (EFI_ERROR (Status)) { goto Done; }
-  Status = TpmOpsUnwrap (Tcg2, &Blob, Auth, AuthSize, Secret, &SecretSize, &Rc);
+  if (Pcr0) {
+    Status = TpmOpsUnwrapPcr0 (Tcg2, &Blob, Secret, &SecretSize, &Rc);
+    if (EFI_ERROR (Status)) { Print (L"PCR policy unseal failed. No reseal or password fallback.\r\n"); }
+  } else {
+    Status = ReadAuth (L"Object authorization", Auth, &AuthSize);
+    if (EFI_ERROR (Status)) { goto Done; }
+    Status = TpmOpsUnwrap (Tcg2, &Blob, Auth, AuthSize, Secret, &SecretSize, &Rc);
+  }
   ReportTpm (Status, Rc);
   if (!EFI_ERROR (Status)) {
     Print (L"Unsealed plaintext (%u bytes, displayed for this example):\r\n", (UINT32)SecretSize);
@@ -232,14 +248,16 @@ UefiMain (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
   EFI_STATUS Status;
   CONST CHAR16 *Command = NULL;
   BOOLEAN Runtime = FALSE;
+  BOOLEAN Pcr0 = FALSE;
   UINTN Index;
   Print (L"TPMOps - TPM 2.0 sealed-data example\r\n");
-  Print (L"Variable: %s\r\nVendor GUID: %g\r\n", mVariableName, &mVendorGuid);
   Status = gBS->HandleProtocol (ImageHandle, &gEfiShellParametersProtocolGuid, (VOID **)&Parameters);
   if (!EFI_ERROR (Status)) {
     for (Index = 1; Index < Parameters->Argc; Index++) {
       if (StrCmp (Parameters->Argv[Index], L"--RT") == 0 && !Runtime) {
         Runtime = TRUE;
+      } else if (StrCmp (Parameters->Argv[Index], L"--pcr0") == 0 && !Pcr0) {
+        Pcr0 = TRUE;
       } else if (Command == NULL) {
         Command = Parameters->Argv[Index];
       } else {
@@ -247,18 +265,21 @@ UefiMain (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
       }
     }
   }
+  mVariableName = Pcr0 ? mPcr0Variable : mPasswordVariable;
+  Print (L"Variable: %s\r\nVendor GUID: %g\r\n", mVariableName, &mVendorGuid);
   if ((Command == NULL) || (StrCmp (Command, L"--help") == 0) || (StrCmp (Command, L"-h") == 0)) {
-    Print (L"Usage: TPMOps.efi wrap [--RT] | unwrap | info | dump | delete\r\n");
+    Print (L"Usage: TPMOps.efi wrap [--RT] [--pcr0] | unwrap | info | dump | delete [--pcr0]\r\n");
     Print (L"Default NV|BS. --RT adds runtime visibility ONLY when wrapping a new variable.\r\n");
     Print (L"wrap seals built-in sample data, asks for object authorization twice, refuses overwrite.\r\n");
-    Print (L"No PCR binding, TPM Clear, hierarchy changes, persistent handles or TPM NV indexes.\r\n");
+    Print (L"--pcr0 selects a SEPARATE variable: policy-only SHA256 PCR0 + Unseal, no password prompt.\r\n");
+    Print (L"PCR mismatch never reseals/falls back. No PCR writes, TPM Clear, hierarchy changes or TPM NV indexes.\r\n");
     return EFI_SUCCESS;
   }
-  if (StrCmp (Command, L"wrap") == 0) { return Wrap (Runtime); }
+  if (StrCmp (Command, L"wrap") == 0) { return Wrap (Runtime, Pcr0); }
   if (Runtime) { Print (L"--RT is only valid with wrap; existing attributes are not changed.\r\n"); return EFI_INVALID_PARAMETER; }
   if ((StrCmp (Command, L"unwrap") == 0) || (StrCmp (Command, L"info") == 0) ||
       (StrCmp (Command, L"dump") == 0) || (StrCmp (Command, L"delete") == 0)) {
-    return StoredOperation (Command);
+    return StoredOperation (Command, Pcr0);
   }
   Print (L"Unknown command. Use TPMOps.efi --help\r\n");
   return EFI_INVALID_PARAMETER;

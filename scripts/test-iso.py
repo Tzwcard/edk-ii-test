@@ -21,7 +21,7 @@ selector = selectors.DefaultSelector()
 selector.register(process.stdout, selectors.EVENT_READ)
 transcript = bytearray()
 pending = bytearray()
-commands = [b"map -r\r", b"fs0:\r", b"ls\r", b"TCGOpalCheck.efi\r", b"AtaPassUtil.efi\r", b"SMARTDisp.efi\r", b"NVMeDisp.efi\r", b"NVMeResetTest.efi --help\r", b"UEFINVTest.efi\r", b"TPMOps.efi\r", b"HelloWorld.efi\r"]
+commands = [b"map -r\r", b"fs0:\r", b"ls\r", b"TCGOpalCheck.efi\r", b"AtaPassUtil.efi\r", b"SMARTDisp.efi\r", b"NVMeDisp.efi\r", b"NVMeResetTest.efi --help\r", b"OpalTest.efi --help\r", b"UEFINVTest.efi\r", b"TPMOps.efi\r", b"HelloWorld.efi\r"]
 index = 0
 success = False
 deadline = time.monotonic() + 90
@@ -51,6 +51,7 @@ try:
                 and b"Usage: TPMOps.efi wrap [--RT]" in transcript
                 and b"NVMeDisp - read-only NVMe Identify Controller (CNS=1)" in transcript
                 and b"Usage: NVMeResetTest.efi [controller-index] | --list" in transcript
+                and b"Usage: OpalTest.efi --list" in transcript
                 and index == len(commands)
             )
             break

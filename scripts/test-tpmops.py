@@ -116,6 +116,11 @@ with tempfile.TemporaryDirectory(prefix="edkii-tpmops-") as directory:
                 (b">", b"TPMOps.efi wrap --RT"),  # Must refuse existing blob, no password prompt.
                 (b">", b"TPMOps.efi delete"), (b">", b"TPMOps.efi wrap --RT"),
                 (prompt, auth), (prompt, auth), (b">", b"TPMOps.efi info"),
+                (b">", b"TPMOps.efi wrap --pcr0 --RT"),
+                (b">", b"TPMOps.efi unwrap --pcr0"),
+                (b">", b"TPMOps.efi info --pcr0"),
+                (b">", b"TPMOps.efi wrap --pcr0"),
+                (b">", b"TPMOps.efi dump --pcr0"),
                 (b">", b"echo TPMOPS_BOOT1_DONE"),
             ], b"TPMOPS_BOOT1_DONE", logs / "boot1.log")
             assert b"TPMOps WRAP PASS: sealed blob stored and verified; RT=0." in first
@@ -124,6 +129,14 @@ with tempfile.TemporaryDirectory(prefix="edkii-tpmops-") as directory:
             assert b"TPMOps UNWRAP PASS." in first
             assert b"TPMOps WRAP PASS: sealed blob stored and verified; RT=1." in first
             assert b"attributes=0x00000007" in first
+            assert b"Policy-only: SHA256 PCR0 + Unseal command; no object password." in first
+            assert b"Record v2:" in first and first.count(b"TPMOps UNWRAP PASS.") == 2
+            assert first.count(b"New object authorization") == 2  # Password wraps only, never PCR0
+            match_pcr0 = re.search(rb"TPMOPS_BLOB_BEGIN\s+([0-9a-fA-F\s]+)TPMOPS_BLOB_END", first)
+            assert match_pcr0
+            policy_record = bytes.fromhex(match_pcr0.group(1).decode())
+            assert policy_record[:8] == b"TPMWRAP2"
+            (logs / "pcr0-record.bin").write_bytes(policy_record)
 
             # QEMU disconnect can terminate swtpm. Restart it with the SAME
             # permanent state to test persistence across a complete TPM power cycle.
@@ -136,9 +149,12 @@ with tempfile.TemporaryDirectory(prefix="edkii-tpmops-") as directory:
                 (b"Shell>", b"fs0:"), (b">", b"TPMOps.efi info"),
                 (b">", b"TPMOps.efi unwrap"), (prompt, auth),
                 (b">", b"TPMOps.efi dump"), (b">", b"TPMOps.efi delete"),
-                (b">", b"TPMOps.efi info"), (b">", b"echo TPMOPS_BOOT2_DONE"),
+                (b">", b"TPMOps.efi info"),
+                (b">", b"TPMOps.efi unwrap --pcr0"),
+                (b">", b"TPMOps.efi info --pcr0"),
+                (b">", b"echo TPMOPS_BOOT2_DONE"),
             ], b"TPMOPS_BOOT2_DONE", logs / "boot2.log")
-            assert second.count(b"TPMOps UNWRAP PASS.") == 1
+            assert second.count(b"TPMOps UNWRAP PASS.") == 2
             assert b"RT=1" in second and b"GetVariable: Not Found" in second
             match = re.search(rb"TPMOPS_BLOB_BEGIN\s+([0-9a-fA-F\s]+)TPMOPS_BLOB_END", second)
             assert match, "Wrapped blob dump not found"
@@ -201,5 +217,6 @@ with tempfile.TemporaryDirectory(prefix="edkii-tpmops-") as directory:
 print("PASS: TPM2 seal/unseal, NV|BS and --RT attributes, overwrite refusal, hidden authorization.")
 print("PASS: same wrapped blob unseals after QEMU restart; wrong authorization fails; delete verified.")
 print("PASS: Linux tpm2-tools recreate the parent and load/unseal the UEFI-generated blobs.")
+print("PASS: actual EFI PCR0 policy-only seal/unseal without password prompts, separate v2 record and persistence across QEMU/TPM restart.")
 print(f"Logs: {logs}")
 print("Only disposable swtpm state and OVMF VARS were used; no real TPM or host variables accessed.")
